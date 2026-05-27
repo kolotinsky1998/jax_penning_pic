@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--output-dir", help="Directory where counters and field dumps will be written.")
     parser.add_argument("--cross-section-dir", help="Directory with collision cross-section .txt files.")
     parser.add_argument("--it-num", type=int, help="Number of simulation steps.")
+    parser.add_argument("--ptcls-per-cell", type=float, help="Initial macroparticles per grid cell.")
     parser.add_argument("--log-interval", type=int, help="Particle counter logging interval.")
     parser.add_argument("--field-dump-interval", type=int, help="Field dump interval for rho_e/rho_i/phi txt files.")
     parser.add_argument("--max-electrons", type=int, help="Fixed electron pool capacity.")
@@ -39,6 +40,7 @@ def main() -> None:
     replacements = {
         "poisson_solver": args.poisson_solver,
         "it_num": args.it_num,
+        "ptcls_per_cell": args.ptcls_per_cell,
         "log_interval": args.log_interval,
         "field_dump_interval": args.field_dump_interval,
         "max_electrons": args.max_electrons,

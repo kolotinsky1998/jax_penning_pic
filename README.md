@@ -98,6 +98,7 @@ Important CLI overrides:
 - `--output-dir`
 - `--cross-section-dir`
 - `--it-num`
+- `--ptcls-per-cell`
 - `--log-interval`
 - `--field-dump-interval`
 - `--poisson-solver`
