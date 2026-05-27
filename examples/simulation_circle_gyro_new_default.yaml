@@ -1,0 +1,4 @@
+scenario: SimulationCircleGyroNEW
+notes:
+  - Mirrors default parameters
+  - Single GPU target
