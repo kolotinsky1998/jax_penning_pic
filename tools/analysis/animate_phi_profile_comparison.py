@@ -126,19 +126,18 @@ def extract_profile(frame: np.ndarray, profile_axis: str, fixed_index: int) -> n
 
 
 def add_style() -> None:
-    plt.style.use("dark_background")
+    plt.style.use("default")
     plt.rcParams.update(
         {
-            "figure.facecolor": "#0b1020",
-            "axes.facecolor": "#0b1020",
-            "savefig.facecolor": "#0b1020",
-            "axes.edgecolor": "#d0d7ff",
-            "axes.labelcolor": "#f4f7ff",
-            "text.color": "#f4f7ff",
-            "xtick.color": "#d7deff",
-            "ytick.color": "#d7deff",
+            "figure.facecolor": "white",
+            "axes.facecolor": "white",
+            "savefig.facecolor": "white",
+            "axes.edgecolor": "#222222",
+            "axes.labelcolor": "#111111",
+            "text.color": "#111111",
+            "xtick.color": "#111111",
+            "ytick.color": "#111111",
             "font.size": 13,
-            "axes.titleweight": "bold",
         }
     )
 
@@ -194,13 +193,11 @@ def main() -> None:
         default_fixed = nx // 2
         x_values = np.arange(ny)
         x_label = "y cell index"
-        fixed_label = "x"
     else:
         max_fixed = ny - 1
         default_fixed = ny // 2
         x_values = np.arange(nx)
         x_label = "x cell index"
-        fixed_label = "y"
 
     fixed_index = default_fixed if args.fixed_index is None else args.fixed_index
     if fixed_index < 0 or fixed_index > max_fixed:
@@ -225,13 +222,12 @@ def main() -> None:
     (reference_line,) = ax.plot(x_values, reference_profiles[0], color=args.reference_color, lw=2.6, label=args.reference_label)
     (jax_line,) = ax.plot(x_values, jax_profiles[0], color=args.jax_color, lw=2.6, label=args.jax_label)
 
-    ax.set_title("Electric Potential Profile Comparison", fontsize=22, pad=14)
     ax.set_xlabel(x_label, fontsize=15)
     ax.set_ylabel(r"$\phi$ (V)", fontsize=15)
     ax.set_xlim(float(x_values[0]), float(x_values[-1]))
     ax.set_ylim(y_min, y_max)
-    ax.grid(True, alpha=0.22, linestyle="--")
-    ax.legend(loc="lower right", framealpha=0.85)
+    ax.grid(True, color="#d0d0d0", alpha=0.8, linestyle="--", linewidth=0.8)
+    ax.legend(loc="lower right", framealpha=0.9, facecolor="white", edgecolor="#555555")
 
     for spine in ax.spines.values():
         spine.set_linewidth(1.2)
@@ -244,7 +240,7 @@ def main() -> None:
         ha="left",
         va="top",
         fontsize=14,
-        bbox={"facecolor": "#111933", "edgecolor": "#8bd3ff", "alpha": 0.85, "boxstyle": "round,pad=0.35"},
+        bbox={"facecolor": "white", "edgecolor": "#60a5fa", "alpha": 0.9, "boxstyle": "round,pad=0.35"},
     )
     stat_text = ax.text(
         0.98,
@@ -254,17 +250,7 @@ def main() -> None:
         ha="right",
         va="top",
         fontsize=12,
-        bbox={"facecolor": "#111933", "edgecolor": "#fef08a", "alpha": 0.8, "boxstyle": "round,pad=0.35"},
-    )
-    slice_text = ax.text(
-        0.5,
-        1.02,
-        f"profile along {args.profile_axis} at fixed {fixed_label} = {fixed_index}",
-        transform=ax.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=12,
-        color="#d7deff",
+        bbox={"facecolor": "white", "edgecolor": "#ca8a04", "alpha": 0.9, "boxstyle": "round,pad=0.35"},
     )
 
     def update(frame_idx: int):
@@ -280,7 +266,7 @@ def main() -> None:
             f"mean Δphi = {np.mean(diff):.3e}\n"
             f"RMS Δphi = {np.sqrt(np.mean(diff * diff)):.3e}"
         )
-        return reference_line, jax_line, time_text, stat_text, slice_text
+        return reference_line, jax_line, time_text, stat_text
 
     anim = FuncAnimation(
         fig,
