@@ -99,6 +99,27 @@ def _timed_stage(profile_row: dict, name: str, fn):
     return result
 
 
+def _advance_event_count(rate: float, remainder):
+    target = jnp.asarray(rate, dtype=jnp.float32) + remainder
+    count = jnp.floor(target).astype(jnp.int32)
+    return count, target - count.astype(jnp.float32)
+
+
+def _event_count(do_event, rate: float, remainder):
+    return jax.lax.cond(
+        do_event,
+        lambda rem: _advance_event_count(rate, rem),
+        lambda rem: (jnp.array(0, dtype=jnp.int32), rem),
+        remainder,
+    )
+
+
+def _profile_event_count(rate: float, remainder):
+    target = float(remainder) + rate
+    count = int(math.floor(target))
+    return count, jnp.array(target - count, dtype=jnp.float32)
+
+
 def _electron_collisions_kernel(electrons, ions, counters, rng_key, runtime, tables, config: SimulationConfig):
     key1, key2, new_key = jax.random.split(rng_key, 3)
     prob_el = electron_elastic_probability(
@@ -138,20 +159,20 @@ def _ion_collisions_kernel(ions, rng_key, runtime, tables, config: SimulationCon
     return ions, new_key
 
 
-def _cold_sink_kernel(ions, counters, rng_key, geometry, runtime):
-    ions, removed_i = remove_some_ions_on_cold_cathode(ions, rng_key, geometry, runtime)
+def _cold_sink_kernel(ions, counters, rng_key, geometry, count):
+    ions, removed_i = remove_some_ions_on_cold_cathode(ions, rng_key, geometry, count)
     counters = counters._replace(ntot_cold_cathode_leave=counters.ntot_cold_cathode_leave + removed_i)
     return ions, counters
 
 
-def _hot_emission_kernel(electrons, counters, rng_key, geometry, runtime):
-    electrons, emitted_hot = hot_cathode_emission(electrons, rng_key, geometry, runtime, E_M)
+def _hot_emission_kernel(electrons, counters, rng_key, geometry, count):
+    electrons, emitted_hot = hot_cathode_emission(electrons, rng_key, geometry, count, E_M)
     counters = counters._replace(ntot_hot_cathode_emission=counters.ntot_hot_cathode_emission + emitted_hot)
     return electrons, counters
 
 
-def _cold_secondary_kernel(electrons, rng_key, geometry, runtime):
-    electrons, _ = cold_secondary_emission(electrons, rng_key, geometry, runtime, E_M)
+def _cold_secondary_kernel(electrons, rng_key, geometry, count):
+    electrons, _ = cold_secondary_emission(electrons, rng_key, geometry, count, E_M)
     return electrons
 
 
@@ -200,6 +221,9 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
 
     counters = state.counters
     rng_key = state.rng_key
+    hot_emit_remainder = state.hot_emit_remainder
+    cold_emit_remainder = state.cold_emit_remainder
+    ion_leave_remainder = state.ion_leave_remainder
 
     do_electron_collisions = jnp.equal(jnp.mod(state.step, config.collision_step_electron), 0)
     with jax.named_scope("electron_collisions"):
@@ -230,33 +254,48 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
         )
 
     do_cold_sink = jnp.equal(jnp.mod(state.step, config.ion_leave_step), 0)
+    ion_leave_count, ion_leave_remainder = _event_count(
+        do_cold_sink,
+        state.runtime.ion_leave_rate,
+        ion_leave_remainder,
+    )
     rng_key, sink_key = jax.random.split(rng_key)
     with jax.named_scope("cold_cathode_sink"):
         ions, counters = jax.lax.cond(
             do_cold_sink,
             lambda args: _cold_sink_kernel(*args),
             lambda args: args[:2],
-            (ions, counters, sink_key, state.geometry, state.runtime),
+            (ions, counters, sink_key, state.geometry, ion_leave_count),
         )
 
     do_hot_emit = jnp.equal(jnp.mod(state.step, config.electron_emission_hot_step), 0)
+    hot_emit_count, hot_emit_remainder = _event_count(
+        do_hot_emit,
+        state.runtime.hot_emit_rate,
+        hot_emit_remainder,
+    )
     rng_key, hot_key = jax.random.split(rng_key)
     with jax.named_scope("hot_cathode_emission"):
         electrons, counters = jax.lax.cond(
             do_hot_emit,
             lambda args: _hot_emission_kernel(*args),
             lambda args: args[:2],
-            (electrons, counters, hot_key, state.geometry, state.runtime),
+            (electrons, counters, hot_key, state.geometry, hot_emit_count),
         )
 
     do_cold_emit = jnp.equal(jnp.mod(state.step, config.electron_emission_cold_step), 0)
+    cold_emit_count, cold_emit_remainder = _event_count(
+        do_cold_emit,
+        state.runtime.cold_emit_rate,
+        cold_emit_remainder,
+    )
     rng_key, cold_key = jax.random.split(rng_key)
     with jax.named_scope("cold_secondary_emission"):
         electrons = jax.lax.cond(
             do_cold_emit,
             lambda args: _cold_secondary_kernel(*args),
             lambda args: args[0],
-            (electrons, cold_key, state.geometry, state.runtime),
+            (electrons, cold_key, state.geometry, cold_emit_count),
         )
 
     return state._replace(
@@ -264,6 +303,9 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
         ions=ions,
         fields=state.fields._replace(rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid),
         counters=counters,
+        hot_emit_remainder=hot_emit_remainder,
+        cold_emit_remainder=cold_emit_remainder,
+        ion_leave_remainder=ion_leave_remainder,
         step=state.step + 1,
         rng_key=rng_key,
     )
@@ -331,6 +373,9 @@ def step_once_profiled(state, tables, config: SimulationConfig):
 
     counters = state.counters
     rng_key = state.rng_key
+    hot_emit_remainder = state.hot_emit_remainder
+    cold_emit_remainder = state.cold_emit_remainder
+    ion_leave_remainder = state.ion_leave_remainder
     if int(state.step) % config.collision_step_electron == 0:
         key1, key2, new_key = jax.random.split(rng_key, 3)
         prob_el = _timed_stage(
@@ -396,10 +441,14 @@ def step_once_profiled(state, tables, config: SimulationConfig):
 
     if int(state.step) % config.ion_leave_step == 0:
         key5, rng_key = jax.random.split(rng_key)
+        ion_leave_count, ion_leave_remainder = _profile_event_count(
+            state.runtime.ion_leave_rate,
+            ion_leave_remainder,
+        )
         ions, removed_i = _timed_stage(
             profile_row,
             "cold_cathode_ion_sink_s",
-            lambda: remove_some_ions_on_cold_cathode(ions, key5, state.geometry, state.runtime),
+            lambda: remove_some_ions_on_cold_cathode(ions, key5, state.geometry, ion_leave_count),
         )
         counters = counters._replace(ntot_cold_cathode_leave=counters.ntot_cold_cathode_leave + removed_i)
     else:
@@ -407,10 +456,14 @@ def step_once_profiled(state, tables, config: SimulationConfig):
 
     if int(state.step) % config.electron_emission_hot_step == 0:
         key6, rng_key = jax.random.split(rng_key)
+        hot_emit_count, hot_emit_remainder = _profile_event_count(
+            state.runtime.hot_emit_rate,
+            hot_emit_remainder,
+        )
         electrons, emitted_hot = _timed_stage(
             profile_row,
             "hot_cathode_emission_s",
-            lambda: hot_cathode_emission(electrons, key6, state.geometry, state.runtime, E_M),
+            lambda: hot_cathode_emission(electrons, key6, state.geometry, hot_emit_count, E_M),
         )
         counters = counters._replace(ntot_hot_cathode_emission=counters.ntot_hot_cathode_emission + emitted_hot)
     else:
@@ -418,10 +471,14 @@ def step_once_profiled(state, tables, config: SimulationConfig):
 
     if int(state.step) % config.electron_emission_cold_step == 0:
         key7, rng_key = jax.random.split(rng_key)
+        cold_emit_count, cold_emit_remainder = _profile_event_count(
+            state.runtime.cold_emit_rate,
+            cold_emit_remainder,
+        )
         electrons, _ = _timed_stage(
             profile_row,
             "cold_secondary_emission_s",
-            lambda: cold_secondary_emission(electrons, key7, state.geometry, state.runtime, E_M),
+            lambda: cold_secondary_emission(electrons, key7, state.geometry, cold_emit_count, E_M),
         )
     else:
         profile_row["cold_secondary_emission_s"] = 0.0
@@ -431,6 +488,9 @@ def step_once_profiled(state, tables, config: SimulationConfig):
         ions=ions,
         fields=state.fields._replace(rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid),
         counters=counters,
+        hot_emit_remainder=hot_emit_remainder,
+        cold_emit_remainder=cold_emit_remainder,
+        ion_leave_remainder=ion_leave_remainder,
         step=state.step + 1,
         rng_key=rng_key,
     )

@@ -63,9 +63,9 @@ class RuntimeState(NamedTuple):
     ion_step: int
     n_gas_scaled: float
     ptcls_per_macro: float
-    hot_emit_count: int
-    cold_emit_count: int
-    ion_leave_count: int
+    hot_emit_rate: float
+    cold_emit_rate: float
+    ion_leave_rate: float
 
 
 class SimState(NamedTuple):
@@ -75,6 +75,9 @@ class SimState(NamedTuple):
     geometry: GeometryState
     runtime: RuntimeState
     counters: CounterState
+    hot_emit_remainder: jax.Array
+    cold_emit_remainder: jax.Array
+    ion_leave_remainder: jax.Array
     step: jax.Array
     rng_key: jax.Array
 
@@ -131,9 +134,9 @@ def build_runtime(config: SimulationConfig) -> tuple[GeometryState, RuntimeState
     i_hot_scaled = config.i_hot * scale
     i_cold_scaled = config.i_cold * scale
     i_ion_leave = i_cold_scaled / (1.0 + config.gamma)
-    ion_leave_count = int(i_ion_leave * config.ion_leave_step * dt / EV / ptcls_per_macro)
-    cold_emit_count = int(config.gamma * i_ion_leave * config.electron_emission_cold_step * dt / EV / ptcls_per_macro)
-    hot_emit_count = int(i_hot_scaled * config.electron_emission_hot_step * dt / EV / ptcls_per_macro)
+    ion_leave_rate = i_ion_leave * config.ion_leave_step * dt / EV / ptcls_per_macro
+    cold_emit_rate = config.gamma * i_ion_leave * config.electron_emission_cold_step * dt / EV / ptcls_per_macro
+    hot_emit_rate = i_hot_scaled * config.electron_emission_hot_step * dt / EV / ptcls_per_macro
     geometry = GeometryState(
         nx=nx,
         ny=ny,
@@ -157,9 +160,9 @@ def build_runtime(config: SimulationConfig) -> tuple[GeometryState, RuntimeState
         ion_step=ion_step,
         n_gas_scaled=n_gas_scaled,
         ptcls_per_macro=ptcls_per_macro,
-        hot_emit_count=hot_emit_count,
-        cold_emit_count=cold_emit_count,
-        ion_leave_count=ion_leave_count,
+        hot_emit_rate=hot_emit_rate,
+        cold_emit_rate=cold_emit_rate,
+        ion_leave_rate=ion_leave_rate,
     )
     return geometry, runtime
 
@@ -189,6 +192,9 @@ def create_initial_state(config: SimulationConfig) -> SimState:
         geometry=geometry,
         runtime=runtime,
         counters=counters,
+        hot_emit_remainder=jnp.array(0.0, dtype=jnp.float32),
+        cold_emit_remainder=jnp.array(0.0, dtype=jnp.float32),
+        ion_leave_remainder=jnp.array(0.0, dtype=jnp.float32),
         step=jnp.array(0, dtype=jnp.int32),
         rng_key=jax.random.PRNGKey(config.seed),
     )

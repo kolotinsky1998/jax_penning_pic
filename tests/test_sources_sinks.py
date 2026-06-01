@@ -6,6 +6,7 @@ from jax_penning_pic.sources_sinks import (
     inject_initial_disk_samples,
     sample_reference_initial_disk,
 )
+from jax_penning_pic.simulation_circle_gyro_new import _profile_event_count
 from jax_penning_pic.state import build_runtime, empty_particle_pool
 
 
@@ -39,3 +40,14 @@ def test_reference_initial_samples_reuse_positions_and_velocity_factors():
     assert jnp.allclose(electrons.y, ions.y)
     assert jnp.allclose(electrons.vx / speed_std_e, ions.vx / speed_std_i)
     assert jnp.all(jnp.linalg.norm(velocity_factors, axis=1) < 3.0)
+
+
+def test_fractional_event_count_accumulates_remainder():
+    remainder = jnp.array(0.0, dtype=jnp.float32)
+    counts = []
+    for _ in range(4):
+        count, remainder = _profile_event_count(2.25, remainder)
+        counts.append(count)
+
+    assert counts == [2, 2, 2, 3]
+    assert bool(jnp.isclose(remainder, 0.0))

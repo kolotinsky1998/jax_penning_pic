@@ -6,7 +6,7 @@ import numpy as np
 
 from .geometry import inside_anode, inside_cold_cathode_ring
 from .particles import all_free_slots, deactivate, first_free_slots, write_particles
-from .state import CounterState, GeometryState, ParticlePool, RuntimeState
+from .state import CounterState, GeometryState, ParticlePool
 
 
 def _sample_ring(key, center_x, center_y, rmin, rmax, count):
@@ -60,9 +60,9 @@ def inject_initial_disk_samples(pool: ParticlePool, x, y, velocity_factors, spee
     return write_particles(pool, indices, valid, x, y, vel[:, 0], vel[:, 1], vel[:, 2])
 
 
-def hot_cathode_emission(pool: ParticlePool, key, geometry: GeometryState, runtime: RuntimeState, particle_mass: float):
+def hot_cathode_emission(pool: ParticlePool, key, geometry: GeometryState, count, particle_mass: float):
     size = pool.x.shape[0]
-    count_mask = jnp.arange(size) < runtime.hot_emit_count
+    count_mask = jnp.arange(size) < count
     x, y = _sample_ring(key, geometry.x_center, geometry.y_center, 0.0, geometry.ion_radius_leave_min, size)
     vz = jnp.full((size,), jnp.sqrt(2.0 * 100.0 * 1.6021766208e-19 / particle_mass), dtype=jnp.float32)
     zeros = jnp.zeros((size,), dtype=jnp.float32)
@@ -73,9 +73,9 @@ def hot_cathode_emission(pool: ParticlePool, key, geometry: GeometryState, runti
     return pool, emitted
 
 
-def cold_secondary_emission(pool: ParticlePool, key, geometry: GeometryState, runtime: RuntimeState, particle_mass: float):
+def cold_secondary_emission(pool: ParticlePool, key, geometry: GeometryState, count, particle_mass: float):
     size = pool.x.shape[0]
-    count_mask = jnp.arange(size) < runtime.cold_emit_count
+    count_mask = jnp.arange(size) < count
     x, y = _sample_ring(
         key,
         geometry.x_center,
@@ -98,11 +98,11 @@ def remove_on_anode(pool: ParticlePool, geometry: GeometryState):
     return deactivate(pool, outside), removed
 
 
-def remove_some_ions_on_cold_cathode(pool: ParticlePool, key, geometry: GeometryState, runtime: RuntimeState):
+def remove_some_ions_on_cold_cathode(pool: ParticlePool, key, geometry: GeometryState, count):
     candidates = pool.alive & inside_cold_cathode_ring(pool.x, pool.y, geometry)
     perm = jax.random.permutation(key, pool.alive.shape[0])
     shuffled_candidates = candidates[perm]
-    chosen_in_perm = shuffled_candidates & (jnp.cumsum(shuffled_candidates.astype(jnp.int32)) <= runtime.ion_leave_count)
+    chosen_in_perm = shuffled_candidates & (jnp.cumsum(shuffled_candidates.astype(jnp.int32)) <= count)
     kill_mask = jnp.zeros_like(pool.alive)
     kill_mask = kill_mask.at[perm].set(chosen_in_perm)
     removed = chosen_in_perm.astype(jnp.int32).sum()
