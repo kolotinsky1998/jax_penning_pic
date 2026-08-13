@@ -98,6 +98,8 @@ Important CLI overrides:
 - `--output-dir`
 - `--cross-section-dir`
 - `--it-num`
+- `--grid-size` (square Poisson grid, `N x N`; minimum `3`)
+- `--ion-mass-ratio` (ion mass as a multiple of the electron mass; default `500`)
 - `--ptcls-per-cell`
 - `--log-interval`
 - `--field-dump-interval`

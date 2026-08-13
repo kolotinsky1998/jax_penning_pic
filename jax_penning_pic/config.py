@@ -69,6 +69,7 @@ class SimulationConfig:
     max_ions: int
     cross_sections: CrossSectionPaths
     output_dir: str
+    grid_size: int | None = None
 
     @property
     def t_e_kelvin(self) -> float:
@@ -88,6 +89,7 @@ def default_config(
     return SimulationConfig(
         scale=0.02,
         gyro_coeff=100,
+        grid_size=None,
         it_num=int(400),
         ptcls_per_cell=1.0,
         r=0.26,

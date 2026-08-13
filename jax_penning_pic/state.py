@@ -117,10 +117,12 @@ def build_runtime(config: SimulationConfig) -> tuple[GeometryState, RuntimeState
     dt = dt_e
     ion_step = max(1, round(dt_i / dt_e))
     r_d = debye_radius(n_e_scaled, n_i_scaled, config.t_e_kelvin, config.t_i_kelvin) * 2.0
-    nx = int((r_scaled * 2.0) / r_d)
-    ny = int((r_scaled * 2.0) / r_d)
-    dx = r_d
-    dy = r_d
+    if config.grid_size is not None and config.grid_size < 3:
+        raise ValueError("grid_size must be at least 3")
+    nx = config.grid_size if config.grid_size is not None else int((r_scaled * 2.0) / r_d)
+    ny = nx
+    dx = (r_scaled * 2.0) / nx if config.grid_size is not None else r_d
+    dy = dx
     radius_injection = 0.3 * nx * dx
     x_center = 0.5 * nx * dx
     y_center = 0.5 * ny * dy

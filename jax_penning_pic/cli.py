@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+import math
 
-from .config import default_config
+from .config import E_M, default_config
 from .simulation_circle_gyro_new import run_simulation
+
+
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
+    return parsed
 
 
 def main() -> None:
@@ -17,6 +25,12 @@ def main() -> None:
     parser.add_argument("--output-dir", help="Directory where counters and field dumps will be written.")
     parser.add_argument("--cross-section-dir", help="Directory with collision cross-section .txt files.")
     parser.add_argument("--it-num", type=int, help="Number of simulation steps.")
+    parser.add_argument("--grid-size", type=int, help="Poisson grid size in each dimension (N x N, minimum 3).")
+    parser.add_argument(
+        "--ion-mass-ratio",
+        type=positive_float,
+        help="Ion-to-electron mass ratio m_ion / m_e (default: 500).",
+    )
     parser.add_argument("--ptcls-per-cell", type=float, help="Initial macroparticles per grid cell.")
     parser.add_argument("--log-interval", type=int, help="Particle counter logging interval.")
     parser.add_argument("--field-dump-interval", type=int, help="Field dump interval for rho_e/rho_i/phi txt files.")
@@ -40,6 +54,8 @@ def main() -> None:
     replacements = {
         "poisson_solver": args.poisson_solver,
         "it_num": args.it_num,
+        "grid_size": args.grid_size,
+        "m_ion": args.ion_mass_ratio * E_M if args.ion_mass_ratio is not None else None,
         "ptcls_per_cell": args.ptcls_per_cell,
         "log_interval": args.log_interval,
         "field_dump_interval": args.field_dump_interval,
