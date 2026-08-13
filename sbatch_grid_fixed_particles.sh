@@ -15,20 +15,22 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 
 GRID_SIZES=(35 70 140 280 35 70 140 280)
+PTCLS_PER_CELL=(4 1 0.25 0.0625 4 1 0.25 0.0625)
 SOLVERS=(direct_inverse direct_inverse direct_inverse direct_inverse jacobi jacobi jacobi jacobi)
 
 TASK_ID="${SLURM_ARRAY_TASK_ID}"
 GRID_SIZE="${GRID_SIZES[$TASK_ID]}"
+PPC="${PTCLS_PER_CELL[$TASK_ID]}"
 SOLVER="${SOLVERS[$TASK_ID]}"
 OUTPUT_DIR="outputs/grid_fixed_particles/${SOLVER}_${GRID_SIZE}x${GRID_SIZE}"
 
-echo "grid=${GRID_SIZE}x${GRID_SIZE} solver=${SOLVER} it_num=2000000"
+echo "grid=${GRID_SIZE}x${GRID_SIZE} solver=${SOLVER} ptcls_per_cell=${PPC} it_num=2000000"
 
 time srun -A proj_1827 --gpus=1 env PYTHONPATH=. python3 -u \
   scripts/run_simulation_circle_gyro_new.py \
   --poisson-solver "${SOLVER}" \
   --grid-size "${GRID_SIZE}" \
-  --ptcls-per-cell 1 \
+  --ptcls-per-cell "${PPC}" \
   --max-electrons 300000 \
   --max-ions 300000 \
   --it-num 2000000 \
