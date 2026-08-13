@@ -16,13 +16,15 @@ cd "${SLURM_SUBMIT_DIR}"
 
 ION_MASS_RATIOS=(100 200 300 500 1000 2000 4000 8000)
 IT_NUMS=(400000 800000 1200000 2000000 4000000 8000000 16000000 32000000)
+FIELD_DUMP_INTERVALS=(2000 4000 6000 10000 20000 40000 80000 160000)
 
 TASK_ID="${SLURM_ARRAY_TASK_ID}"
 ION_MASS_RATIO="${ION_MASS_RATIOS[$TASK_ID]}"
 IT_NUM="${IT_NUMS[$TASK_ID]}"
+FIELD_DUMP_INTERVAL="${FIELD_DUMP_INTERVALS[$TASK_ID]}"
 OUTPUT_DIR="outputs/ion_mass_scan/mi_${ION_MASS_RATIO}_me"
 
-echo "ion_mass_ratio=${ION_MASS_RATIO} grid=70x70 it_num=${IT_NUM}"
+echo "ion_mass_ratio=${ION_MASS_RATIO} grid=70x70 it_num=${IT_NUM} field_dump_interval=${FIELD_DUMP_INTERVAL}"
 
 time srun -A proj_1827 --gpus=1 env PYTHONPATH=. python3 -u \
   scripts/run_simulation_circle_gyro_new.py \
@@ -33,4 +35,5 @@ time srun -A proj_1827 --gpus=1 env PYTHONPATH=. python3 -u \
   --max-electrons 300000 \
   --max-ions 300000 \
   --it-num "${IT_NUM}" \
+  --field-dump-interval "${FIELD_DUMP_INTERVAL}" \
   --output-dir "${OUTPUT_DIR}"
