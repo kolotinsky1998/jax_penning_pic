@@ -58,9 +58,6 @@ class GeometryState(NamedTuple):
 
 class RuntimeState(NamedTuple):
     dt: float
-    dt_e: float
-    dt_i: float
-    ion_step: int
     n_gas_scaled: float
     ptcls_per_macro: float
     hot_emit_rate: float
@@ -112,10 +109,7 @@ def build_runtime(config: SimulationConfig) -> tuple[GeometryState, RuntimeState
     n_e_scaled = config.n_e / scale
     n_i_scaled = config.n_i / scale
     r_scaled = config.r * scale
-    dt_e = 1.0 / (EV * b_scaled / E_M) / 10.0 * config.gyro_coeff
-    dt_i = 1.0 / (EV * b_scaled / config.m_ion) / 10.0
-    dt = dt_e
-    ion_step = max(1, round(dt_i / dt_e))
+    dt = 1.0 / (EV * b_scaled / E_M) / 10.0 * config.gyro_coeff
     r_d = debye_radius(n_e_scaled, n_i_scaled, config.t_e_kelvin, config.t_i_kelvin) * 2.0
     if config.grid_size is not None and config.grid_size < 3:
         raise ValueError("grid_size must be at least 3")
@@ -157,9 +151,6 @@ def build_runtime(config: SimulationConfig) -> tuple[GeometryState, RuntimeState
     )
     runtime = RuntimeState(
         dt=dt,
-        dt_e=dt_e,
-        dt_i=dt_i,
-        ion_step=ion_step,
         n_gas_scaled=n_gas_scaled,
         ptcls_per_macro=ptcls_per_macro,
         hot_emit_rate=hot_emit_rate,

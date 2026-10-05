@@ -63,6 +63,7 @@ class SimulationConfig:
     poisson_iterations: int
     poisson_tol: float
     poisson_solver: str
+    use_rho_filter: bool
     log_interval: int
     field_dump_interval: int
     max_electrons: int
@@ -117,6 +118,7 @@ def default_config(
         poisson_iterations=250,
         poisson_tol=1.0e-4,
         poisson_solver="direct_inverse",
+        use_rho_filter=True,
         log_interval=100,
         field_dump_interval=10_000,
         max_electrons=300_000,

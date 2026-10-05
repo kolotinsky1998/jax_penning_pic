@@ -64,7 +64,7 @@ def initialize_particles(state, config: SimulationConfig):
     electrons = inject_initial_disk_samples(state.electrons, x, y, velocity_factors, speed_std_e)
     ions = inject_initial_disk_samples(state.ions, x, y, velocity_factors, speed_std_i)
     electrons = gyro_update_velocity(electrons, -0.5 * state.runtime.dt, -EV, E_M)
-    ions = boris_update_velocity(ions, -0.5 * state.runtime.dt * state.runtime.ion_step, EV, config.m_ion)
+    ions = boris_update_velocity(ions, -0.5 * state.runtime.dt, EV, config.m_ion)
     return state._replace(electrons=electrons, ions=ions, rng_key=new_key)
 
 
@@ -197,7 +197,9 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
         rho_e = linear_charge_deposition(state.electrons, state.geometry, _electron_charge(state), state.fields.rho_e)
         rho_i = linear_charge_deposition(state.ions, state.geometry, _ion_charge(state), state.fields.rho_i)
     with jax.named_scope("rho_filter"):
-        rho = rho_filter_new(rho_e + rho_i, state.geometry.nr_anode)
+        rho = rho_e + rho_i
+        if config.use_rho_filter:
+            rho = rho_filter_new(rho, state.geometry.nr_anode)
     with jax.named_scope("poisson"):
         phi = _solve_poisson(rho, state, tables, config)
     with jax.named_scope("field_from_phi"):
@@ -210,14 +212,8 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
 
     with jax.named_scope("push_electrons"):
         electrons = gyro_push(electrons, state.runtime.dt, -EV, E_M)
-    do_ion_push = jnp.equal(jnp.mod(state.step, state.runtime.ion_step), 0)
     with jax.named_scope("push_ions"):
-        ions = jax.lax.cond(
-            do_ion_push,
-            lambda pool: boris_push(pool, state.runtime.dt * state.runtime.ion_step, EV, config.m_ion),
-            lambda pool: pool,
-            ions,
-        )
+        ions = boris_push(ions, state.runtime.dt, EV, config.m_ion)
 
     counters = state.counters
     rng_key = state.rng_key
@@ -246,12 +242,7 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
     with jax.named_scope("anode_loss"):
         electrons, removed_e = remove_on_anode(electrons, state.geometry)
         counters = counters._replace(ntot_anode_leave=counters.ntot_anode_leave + removed_e)
-        ions = jax.lax.cond(
-            do_ion_push,
-            lambda pool: remove_on_anode(pool, state.geometry)[0],
-            lambda pool: pool,
-            ions,
-        )
+        ions, _ = remove_on_anode(ions, state.geometry)
 
     do_cold_sink = jnp.equal(jnp.mod(state.step, config.ion_leave_step), 0)
     ion_leave_count, ion_leave_remainder = _event_count(
@@ -341,7 +332,11 @@ def step_once_profiled(state, tables, config: SimulationConfig):
         "deposit_ions_s",
         lambda: linear_charge_deposition(state.ions, state.geometry, _ion_charge(state), state.fields.rho_i),
     )
-    rho = _timed_stage(profile_row, "rho_filter_s", lambda: rho_filter_new(rho_e + rho_i, state.geometry.nr_anode))
+    rho = rho_e + rho_i
+    if config.use_rho_filter:
+        rho = _timed_stage(profile_row, "rho_filter_s", lambda: rho_filter_new(rho, state.geometry.nr_anode))
+    else:
+        profile_row["rho_filter_s"] = 0.0
     phi = _timed_stage(
         profile_row,
         "poisson_s",
@@ -362,14 +357,11 @@ def step_once_profiled(state, tables, config: SimulationConfig):
     ions = state.ions._replace(ex=ex_i, ey=ey_i)
 
     electrons = _timed_stage(profile_row, "push_electrons_s", lambda: gyro_push(electrons, state.runtime.dt, -EV, E_M))
-    if int(state.step) % state.runtime.ion_step == 0:
-        ions = _timed_stage(
-            profile_row,
-            "push_ions_s",
-            lambda: boris_push(ions, state.runtime.dt * state.runtime.ion_step, EV, config.m_ion),
-        )
-    else:
-        profile_row["push_ions_s"] = 0.0
+    ions = _timed_stage(
+        profile_row,
+        "push_ions_s",
+        lambda: boris_push(ions, state.runtime.dt, EV, config.m_ion),
+    )
 
     counters = state.counters
     rng_key = state.rng_key
@@ -436,8 +428,7 @@ def step_once_profiled(state, tables, config: SimulationConfig):
 
     electrons, removed_e = _timed_stage(profile_row, "anode_loss_s", lambda: remove_on_anode(electrons, state.geometry))
     counters = counters._replace(ntot_anode_leave=counters.ntot_anode_leave + removed_e)
-    if int(state.step) % state.runtime.ion_step == 0:
-        ions, _ = remove_on_anode(ions, state.geometry)
+    ions, _ = remove_on_anode(ions, state.geometry)
 
     if int(state.step) % config.ion_leave_step == 0:
         key5, rng_key = jax.random.split(rng_key)

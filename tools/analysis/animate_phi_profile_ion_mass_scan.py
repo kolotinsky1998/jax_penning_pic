@@ -19,7 +19,6 @@ COLORS = ("#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#4f
 class Case:
     mass_ratio: float
     directory: Path
-    ion_step: int
 
     @property
     def label(self) -> str:
@@ -56,18 +55,6 @@ def parse_args() -> argparse.Namespace:
         "--pattern",
         default="phi_[0-9]*.txt",
         help="Glob pattern used in every selected directory. Default: %(default)s",
-    )
-    parser.add_argument(
-        "--time-axis",
-        choices=("ion-updates", "step"),
-        default="ion-updates",
-        help="Synchronize files by step/ion_step or by raw simulation step. Default: %(default)s",
-    )
-    parser.add_argument(
-        "--gyro-coeff",
-        type=float,
-        default=100.0,
-        help="gyro_coeff used to derive ion_step=round(MASS/gyro_coeff). Default: %(default)s",
     )
     parser.add_argument("--start-time", type=float, default=None, help="First synchronized time value to include.")
     parser.add_argument("--end-time", type=float, default=None, help="Last synchronized time value to include.")
@@ -111,14 +98,8 @@ def extract_step(path: Path) -> int:
     return int(match.group(1)) if match else -1
 
 
-def synchronized_time(raw_step: int, case: Case, time_axis: str) -> float:
-    if time_axis == "step":
-        return float(raw_step)
-    return raw_step / case.ion_step
-
-
-def load_frames(case: Case, pattern: str, time_axis: str) -> dict[float, np.ndarray]:
-    frames: dict[float, np.ndarray] = {}
+def load_frames(case: Case, pattern: str) -> dict[int, np.ndarray]:
+    frames: dict[int, np.ndarray] = {}
     for path in sorted(case.directory.glob(pattern), key=extract_step):
         raw_step = extract_step(path)
         if raw_step < 0 or path.stat().st_size == 0:
@@ -127,10 +108,9 @@ def load_frames(case: Case, pattern: str, time_axis: str) -> dict[float, np.ndar
         if frame.ndim != 2:
             print(f"Skipping non-2D file: {path}")
             continue
-        time_value = synchronized_time(raw_step, case, time_axis)
-        if time_value in frames:
-            raise SystemExit(f"Duplicate synchronized time {time_value:g} in {case.directory}")
-        frames[time_value] = frame
+        if raw_step in frames:
+            raise SystemExit(f"Duplicate step {raw_step} in {case.directory}")
+        frames[raw_step] = frame
     return frames
 
 
@@ -182,8 +162,6 @@ def save_animation(animation: FuncAnimation, output_path: Path, fps: int, dpi: i
 
 def main() -> None:
     args = parse_args()
-    if not math.isfinite(args.gyro_coeff) or args.gyro_coeff <= 0.0:
-        raise SystemExit("--gyro-coeff must be positive.")
     if not 0.0 <= args.fixed_fraction <= 1.0:
         raise SystemExit("--fixed-fraction must be between 0 and 1.")
     if args.frame_stride < 1:
@@ -194,11 +172,8 @@ def main() -> None:
     mass_ratios = [mass for mass, _ in args.case]
     if len(set(mass_ratios)) != len(mass_ratios):
         raise SystemExit("Each MASS value may be specified only once.")
-    cases = [
-        Case(mass, directory, max(1, round(mass / args.gyro_coeff)))
-        for mass, directory in args.case
-    ]
-    frame_maps = {case: load_frames(case, args.pattern, args.time_axis) for case in cases}
+    cases = [Case(mass, directory) for mass, directory in args.case]
+    frame_maps = {case: load_frames(case, args.pattern) for case in cases}
     for case, frames in frame_maps.items():
         if not frames:
             raise SystemExit(f"No valid files matched {args.pattern} in {case.directory}")
@@ -266,8 +241,7 @@ def main() -> None:
         for case, line in lines.items():
             line.set_data(coordinate, profiles[case][frame_index])
         value = common_times[frame_index]
-        label = "ion updates" if args.time_axis == "ion-updates" else "step"
-        time_text.set_text(f"{label} = {value:g}")
+        time_text.set_text(f"step = {value:g}")
         return (*lines.values(), time_text)
 
     animation = FuncAnimation(

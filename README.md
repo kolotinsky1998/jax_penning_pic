@@ -98,6 +98,7 @@ Important CLI overrides:
 - `--output-dir`
 - `--cross-section-dir`
 - `--it-num`
+- `--disable-rho-filter` disables smoothing of the deposited total charge density
 - `--grid-size` (square Poisson grid, `N x N`; minimum `3`)
 - `--ion-mass-ratio` (ion mass as a multiple of the electron mass; default `500`)
 - `--ptcls-per-cell`

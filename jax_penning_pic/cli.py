@@ -22,6 +22,11 @@ def main() -> None:
         choices=("direct_inverse", "fft_capacitance", "cg", "jacobi"),
         help="Poisson solver backend to use.",
     )
+    parser.add_argument(
+        "--disable-rho-filter",
+        action="store_true",
+        help="Disable smoothing of the deposited total charge density.",
+    )
     parser.add_argument("--output-dir", help="Directory where counters and field dumps will be written.")
     parser.add_argument("--cross-section-dir", help="Directory with collision cross-section .txt files.")
     parser.add_argument("--it-num", type=int, help="Number of simulation steps.")
@@ -61,6 +66,7 @@ def main() -> None:
         "field_dump_interval": args.field_dump_interval,
         "max_electrons": args.max_electrons,
         "max_ions": args.max_ions,
+        "use_rho_filter": False if args.disable_rho_filter else None,
     }
     replacements = {key: value for key, value in replacements.items() if value is not None}
     if replacements:
