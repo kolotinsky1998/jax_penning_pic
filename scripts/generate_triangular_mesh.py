@@ -111,14 +111,21 @@ def generate(args):
         )
         gmsh.model.mesh.field.setString(field, "F", expression)
         gmsh.model.mesh.field.setAsBackgroundMesh(field)
+        # The runtime solver is P1 FEM, therefore retain only corner vertices
+        # in every element irrespective of a user's global Gmsh defaults.
+        gmsh.option.setNumber("Mesh.ElementOrder", 1)
         gmsh.model.mesh.generate(2)
         gmsh.write(str(out / "mesh.msh"))
 
     mesh = meshio.read(out / "mesh.msh")
-    if "triangle" not in mesh.cells_dict:
-        raise RuntimeError("Gmsh did not create triangular cells")
+    triangle_block = next((block for block in mesh.cells if block.type.startswith("triangle")), None)
+    if triangle_block is None:
+        found = ", ".join(f"{block.type}{block.data.shape}" for block in mesh.cells)
+        raise RuntimeError(f"Gmsh did not create triangular cells; meshio found: {found}")
     points = np.asarray(mesh.points[:, :2], dtype=np.float64)
-    cells = np.asarray(mesh.cells_dict["triangle"], dtype=np.int32)
+    # meshio may expose an existing second-order Gmsh file as ``triangle6``.
+    # P1 FEM uses its first three corner-node entries.
+    cells = np.asarray(triangle_block.data[:, :3], dtype=np.int32)
     cells, areas, grad_shape, lumped_mass, stiffness_diag = _precompute(points, cells)
     boundary_nodes = _boundary_nodes(cells)
     boundary_mask = np.zeros(points.shape[0], dtype=bool)
