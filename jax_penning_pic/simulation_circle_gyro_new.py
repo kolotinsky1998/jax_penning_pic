@@ -623,10 +623,13 @@ def run_simulation(
         "electron_ionization": load_cross_section(config.cross_sections.electron_ionization),
         "ion_elastic": load_cross_section(config.cross_sections.ion_elastic),
     }
-    if config.poisson_solver == "direct_inverse":
-        tables["poisson_direct"] = build_direct_poisson_data(state.geometry)
-    elif config.poisson_solver == "fft_capacitance":
-        tables["poisson_fft_capacitance"] = build_fft_capacitance_data(state.geometry)
+    # Triangular FEM always uses its matrix-free PCG implementation and must
+    # not initialize data structures for the legacy Cartesian solvers.
+    if config.mesh_mode == "uniform_cartesian":
+        if config.poisson_solver == "direct_inverse":
+            tables["poisson_direct"] = build_direct_poisson_data(state.geometry)
+        elif config.poisson_solver == "fft_capacitance":
+            tables["poisson_fft_capacitance"] = build_fft_capacitance_data(state.geometry)
 
     append_csv_row(out_dir / "counters.csv", counters_row(0, state.electrons, state.ions, state.geometry, state.counters))
     _dump_fields(out_dir, state, config)
