@@ -32,3 +32,52 @@ def save_matrix_txt(path: Path, array):
 
 def write_json(path: Path, data: dict):
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def write_triangular_vtk(
+    path: Path,
+    points,
+    cells,
+    *,
+    rho_e,
+    rho_i,
+    rho,
+    phi,
+    ex,
+    ey,
+    elementary_charge: float,
+):
+    """Write a ParaView-readable FEM field dump outside JAX tracing."""
+
+    try:
+        import meshio
+    except ImportError as exc:  # pragma: no cover - package dependency guard
+        raise RuntimeError("VTK output requires meshio; install the FEM dependencies") from exc
+    points_np = np.asarray(points)
+    ex_np = np.asarray(ex)
+    ey_np = np.asarray(ey)
+    meshio.write_points_cells(
+        path,
+        points_np,
+        [("triangle", np.asarray(cells))],
+        point_data={
+            "rho_e": np.asarray(rho_e),
+            "rho_i": np.asarray(rho_i),
+            "rho": np.asarray(rho),
+            "n_e": -np.asarray(rho_e) / elementary_charge,
+            "n_i": np.asarray(rho_i) / elementary_charge,
+            "phi": np.asarray(phi),
+            "E": np.column_stack((ex_np, ey_np, np.zeros_like(ex_np))),
+        },
+    )
+    # A compact PVD collection lets ParaView open every field snapshot at once.
+    files = sorted(path.parent.glob("fields_*.vtu"), key=lambda p: int(p.stem.split("_")[-1]))
+    entries = "\n".join(
+        f'    <DataSet timestep="{item.stem.split("_")[-1]}" group="" part="0" file="{item.name}"/>'
+        for item in files
+    )
+    (path.parent / "fields.pvd").write_text(
+        "<?xml version=\"1.0\"?>\n<VTKFile type=\"Collection\" version=\"0.1\" byte_order=\"LittleEndian\">\n"
+        f"  <Collection>\n{entries}\n  </Collection>\n</VTKFile>\n",
+        encoding="utf-8",
+    )

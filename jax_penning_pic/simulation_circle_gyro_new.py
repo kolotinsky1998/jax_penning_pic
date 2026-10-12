@@ -21,7 +21,7 @@ from .collisions import (
 from .config import E_M, EV, default_config, SimulationConfig
 from .diagnostics import counters_row
 from .interpolation import linear_charge_deposition, linear_field_gather, rho_filter_new
-from .io import append_csv_row, ensure_output_dir, save_matrix_txt, write_json, write_metadata
+from .io import append_csv_row, ensure_output_dir, save_matrix_txt, write_json, write_metadata, write_triangular_vtk
 from .gyro import gyro_push, gyro_update_velocity
 from .particles import boris_push, boris_update_velocity
 from .poisson import (
@@ -41,7 +41,14 @@ from .sources_sinks import (
     remove_some_ions_on_cold_cathode,
     sample_reference_initial_disk,
 )
-from .state import create_initial_state
+from .state import create_initial_state, create_triangular_initial_state
+from .triangular_fem import (
+    cell_field_to_nodes,
+    solve_triangular_poisson,
+    triangular_charge_deposition,
+    triangular_electric_field,
+    triangular_field_gather,
+)
 
 
 def _electron_charge(state):
@@ -177,38 +184,59 @@ def _cold_secondary_kernel(electrons, rng_key, geometry, count):
 
 
 def _solve_poisson(rho, state, tables, config: SimulationConfig):
+    if config.mesh_mode == "triangular_fem":
+        phi, info = solve_triangular_poisson(
+            state.fields.phi, rho, state.geometry.mesh, config.poisson_iterations, config.poisson_tol
+        )
+        return phi, (info.iterations, info.relative_residual, info.converged)
     if config.poisson_solver == "direct_inverse":
-        return solve_poisson_direct(rho, tables["poisson_direct"])
+        phi = solve_poisson_direct(rho, tables["poisson_direct"])
+        return phi, (jnp.array(0, dtype=jnp.int32), jnp.array(0.0), jnp.array(True))
     if config.poisson_solver == "fft_capacitance":
-        return solve_poisson_fft_capacitance(rho, tables["poisson_fft_capacitance"])
+        phi = solve_poisson_fft_capacitance(rho, tables["poisson_fft_capacitance"])
+        return phi, (jnp.array(0, dtype=jnp.int32), jnp.array(0.0), jnp.array(True))
     if config.poisson_solver == "cg":
-        return solve_poisson_cg(state.fields.phi, rho, state.geometry, config.poisson_iterations, config.poisson_tol)
-    return solve_poisson_weighted_jacobi(
-        state.fields.phi,
-        rho,
-        state.geometry,
-        config.poisson_omega,
-        config.poisson_iterations,
+        phi = solve_poisson_cg(state.fields.phi, rho, state.geometry, config.poisson_iterations, config.poisson_tol)
+        return phi, (jnp.array(0, dtype=jnp.int32), jnp.array(0.0), jnp.array(True))
+    phi = solve_poisson_weighted_jacobi(
+        state.fields.phi, rho, state.geometry, config.poisson_omega, config.poisson_iterations,
     )
+    return phi, (jnp.array(0, dtype=jnp.int32), jnp.array(0.0), jnp.array(True))
 
 
 def _step_kernel_impl(state, tables, config: SimulationConfig):
-    with jax.named_scope("deposit"):
-        rho_e = linear_charge_deposition(state.electrons, state.geometry, _electron_charge(state), state.fields.rho_e)
-        rho_i = linear_charge_deposition(state.ions, state.geometry, _ion_charge(state), state.fields.rho_i)
-    with jax.named_scope("rho_filter"):
+    if config.mesh_mode == "triangular_fem":
+        mesh = state.geometry.mesh
+        with jax.named_scope("deposit"):
+            rho_e = triangular_charge_deposition(state.electrons, mesh, _electron_charge(state))
+            rho_i = triangular_charge_deposition(state.ions, mesh, _ion_charge(state))
         rho = rho_e + rho_i
-        if config.use_rho_filter:
-            rho = rho_filter_new(rho, state.geometry.nr_anode)
-    with jax.named_scope("poisson"):
-        phi = _solve_poisson(rho, state, tables, config)
-    with jax.named_scope("field_from_phi"):
-        ex_grid, ey_grid = compute_electric_field(phi, state.geometry)
-    with jax.named_scope("gather"):
-        ex_e, ey_e = linear_field_gather(state.electrons, ex_grid, ey_grid, state.geometry)
-        ex_i, ey_i = linear_field_gather(state.ions, ex_grid, ey_grid, state.geometry)
-        electrons = state.electrons._replace(ex=ex_e, ey=ey_e)
-        ions = state.ions._replace(ex=ex_i, ey=ey_i)
+        with jax.named_scope("poisson"):
+            phi, poisson_info = _solve_poisson(rho, state, tables, config)
+        with jax.named_scope("field_from_phi"):
+            field_cells = triangular_electric_field(phi, mesh)
+            field_nodes = cell_field_to_nodes(field_cells, mesh)
+            ex_grid, ey_grid = field_nodes[:, 0], field_nodes[:, 1]
+        with jax.named_scope("gather"):
+            ex_e, ey_e = triangular_field_gather(state.electrons, field_cells, mesh)
+            ex_i, ey_i = triangular_field_gather(state.ions, field_cells, mesh)
+    else:
+        with jax.named_scope("deposit"):
+            rho_e = linear_charge_deposition(state.electrons, state.geometry, _electron_charge(state), state.fields.rho_e)
+            rho_i = linear_charge_deposition(state.ions, state.geometry, _ion_charge(state), state.fields.rho_i)
+        with jax.named_scope("rho_filter"):
+            rho = rho_e + rho_i
+            if config.use_rho_filter:
+                rho = rho_filter_new(rho, state.geometry.nr_anode)
+        with jax.named_scope("poisson"):
+            phi, poisson_info = _solve_poisson(rho, state, tables, config)
+        with jax.named_scope("field_from_phi"):
+            ex_grid, ey_grid = compute_electric_field(phi, state.geometry)
+        with jax.named_scope("gather"):
+            ex_e, ey_e = linear_field_gather(state.electrons, ex_grid, ey_grid, state.geometry)
+            ex_i, ey_i = linear_field_gather(state.ions, ex_grid, ey_grid, state.geometry)
+    electrons = state.electrons._replace(ex=ex_e, ey=ey_e)
+    ions = state.ions._replace(ex=ex_i, ey=ey_i)
 
     with jax.named_scope("push_electrons"):
         electrons = gyro_push(electrons, state.runtime.dt, -EV, E_M)
@@ -292,7 +320,11 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
     return state._replace(
         electrons=electrons,
         ions=ions,
-        fields=state.fields._replace(rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid),
+        fields=state.fields._replace(
+            rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid,
+            poisson_iterations=poisson_info[0], poisson_relative_residual=poisson_info[1],
+            poisson_converged=poisson_info[2],
+        ),
         counters=counters,
         hot_emit_remainder=hot_emit_remainder,
         cold_emit_remainder=cold_emit_remainder,
@@ -322,6 +354,17 @@ def step_once(state, tables, config: SimulationConfig):
 def step_once_profiled(state, tables, config: SimulationConfig):
     profile_row = {"step": int(state.step)}
 
+    # The FEM backend has one fused JAX kernel.  Keep profiling functional
+    # without duplicating the full branch-specific PIC implementation.
+    if config.mesh_mode == "triangular_fem":
+        t0 = time.perf_counter()
+        state = step_once_jitted(state, tables, config)
+        _block_particles(state.electrons)
+        _block_particles(state.ions)
+        _block_fields(state.fields)
+        profile_row["step_total_s"] = time.perf_counter() - t0
+        return state, profile_row
+
     rho_e = _timed_stage(
         profile_row,
         "deposit_electrons_s",
@@ -337,7 +380,7 @@ def step_once_profiled(state, tables, config: SimulationConfig):
         rho = _timed_stage(profile_row, "rho_filter_s", lambda: rho_filter_new(rho, state.geometry.nr_anode))
     else:
         profile_row["rho_filter_s"] = 0.0
-    phi = _timed_stage(
+    phi, poisson_info = _timed_stage(
         profile_row,
         "poisson_s",
         lambda: _solve_poisson(rho, state, tables, config),
@@ -477,7 +520,11 @@ def step_once_profiled(state, tables, config: SimulationConfig):
     state = state._replace(
         electrons=electrons,
         ions=ions,
-        fields=state.fields._replace(rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid),
+        fields=state.fields._replace(
+            rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid,
+            poisson_iterations=poisson_info[0], poisson_relative_residual=poisson_info[1],
+            poisson_converged=poisson_info[2],
+        ),
         counters=counters,
         hot_emit_remainder=hot_emit_remainder,
         cold_emit_remainder=cold_emit_remainder,
@@ -505,6 +552,46 @@ def _compute_block_size(config: SimulationConfig) -> int:
     return max(1, block)
 
 
+def _dump_fields(out_dir: Path, state, config: SimulationConfig):
+    step = int(state.step)
+    if config.mesh_mode == "triangular_fem":
+        mesh = state.geometry.mesh
+        write_triangular_vtk(
+            out_dir / f"fields_{step}.vtu",
+            mesh.points,
+            mesh.cells,
+            rho_e=state.fields.rho_e,
+            rho_i=state.fields.rho_i,
+            rho=state.fields.rho,
+            phi=state.fields.phi,
+            ex=state.fields.ex,
+            ey=state.fields.ey,
+            elementary_charge=EV,
+        )
+        return
+    save_matrix_txt(out_dir / f"rho_e_{step}.txt", state.fields.rho_e)
+    save_matrix_txt(out_dir / f"rho_i_{step}.txt", state.fields.rho_i)
+    save_matrix_txt(out_dir / f"phi_{step}.txt", state.fields.phi)
+
+
+def _record_poisson_status(out_dir: Path, state, config: SimulationConfig):
+    if config.mesh_mode != "triangular_fem":
+        return
+    append_csv_row(
+        out_dir / "poisson.csv",
+        {
+            "step": int(state.step),
+            "iterations": int(state.fields.poisson_iterations),
+            "relative_residual": float(state.fields.poisson_relative_residual),
+            "converged": bool(state.fields.poisson_converged),
+        },
+    )
+    if not bool(state.fields.poisson_converged):
+        raise RuntimeError(
+            "triangular FEM CG did not converge; increase poisson_iterations or adjust poisson_tol"
+        )
+
+
 def run_simulation(
     config: SimulationConfig | None = None,
     profile: bool = False,
@@ -526,8 +613,11 @@ def run_simulation(
             "execution_mode": "profiled_python_loop" if profile else "jit_block_loop",
         },
     )
-    state = create_initial_state(config)
-    state = initialize_particles(state, config)
+    if config.mesh_mode not in {"uniform_cartesian", "triangular_fem"}:
+        raise ValueError("mesh_mode must be 'uniform_cartesian' or 'triangular_fem'")
+    state = create_triangular_initial_state(config) if config.mesh_mode == "triangular_fem" else create_initial_state(config)
+    if config.mesh_mode == "uniform_cartesian":
+        state = initialize_particles(state, config)
     tables = {
         "electron_elastic": load_cross_section(config.cross_sections.electron_elastic),
         "electron_ionization": load_cross_section(config.cross_sections.electron_ionization),
@@ -539,9 +629,8 @@ def run_simulation(
         tables["poisson_fft_capacitance"] = build_fft_capacitance_data(state.geometry)
 
     append_csv_row(out_dir / "counters.csv", counters_row(0, state.electrons, state.ions, state.geometry, state.counters))
-    save_matrix_txt(out_dir / "rho_e_0.txt", state.fields.rho_e)
-    save_matrix_txt(out_dir / "rho_i_0.txt", state.fields.rho_i)
-    save_matrix_txt(out_dir / "phi_0.txt", state.fields.phi)
+    _dump_fields(out_dir, state, config)
+    _record_poisson_status(out_dir, state, config)
 
     if profile:
         profile_rows = []
@@ -555,9 +644,8 @@ def run_simulation(
                     counters_row(int(state.step), state.electrons, state.ions, state.geometry, state.counters),
                 )
             if (it + 1) % config.field_dump_interval == 0:
-                save_matrix_txt(out_dir / f"rho_e_{int(state.step)}.txt", state.fields.rho_e)
-                save_matrix_txt(out_dir / f"rho_i_{int(state.step)}.txt", state.fields.rho_i)
-                save_matrix_txt(out_dir / f"phi_{int(state.step)}.txt", state.fields.phi)
+                _dump_fields(out_dir, state, config)
+                _record_poisson_status(out_dir, state, config)
             io_after = time.perf_counter()
             profile_row["io_s"] = io_after - io_before
             profile_row["wall_total_with_io_s"] = io_after - io_t0
@@ -612,9 +700,8 @@ def run_simulation(
         if current_step % config.log_interval == 0:
             append_csv_row(out_dir / "counters.csv", counters_row(current_step, state.electrons, state.ions, state.geometry, state.counters))
         if current_step % config.field_dump_interval == 0:
-            save_matrix_txt(out_dir / f"rho_e_{current_step}.txt", state.fields.rho_e)
-            save_matrix_txt(out_dir / f"rho_i_{current_step}.txt", state.fields.rho_i)
-            save_matrix_txt(out_dir / f"phi_{current_step}.txt", state.fields.phi)
+            _dump_fields(out_dir, state, config)
+            _record_poisson_status(out_dir, state, config)
 
     if trace_active:
         jax.profiler.stop_trace()

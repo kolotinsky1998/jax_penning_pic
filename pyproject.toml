@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+fem = ["pygmsh", "gmsh", "meshio"]
 
 [project.scripts]
 jax-penning-run = "jax_penning_pic.cli:main"

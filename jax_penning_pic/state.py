@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 
 from .config import EV, E_M, K_B, SimulationConfig, debye_radius
+from .triangular_fem import TriangularGeometryState, load_tri_mesh
 
 
 class ParticlePool(NamedTuple):
@@ -32,6 +33,9 @@ class FieldState(NamedTuple):
     phi: jax.Array
     ex: jax.Array
     ey: jax.Array
+    poisson_iterations: jax.Array
+    poisson_relative_residual: jax.Array
+    poisson_converged: jax.Array
 
 
 class CounterState(NamedTuple):
@@ -171,6 +175,9 @@ def create_initial_state(config: SimulationConfig) -> SimState:
         phi=jnp.zeros((geometry.nx, geometry.ny), dtype=jnp.float32),
         ex=jnp.zeros((geometry.nx, geometry.ny), dtype=jnp.float32),
         ey=jnp.zeros((geometry.nx, geometry.ny), dtype=jnp.float32),
+        poisson_iterations=jnp.array(0, dtype=jnp.int32),
+        poisson_relative_residual=jnp.array(0.0, dtype=jnp.float32),
+        poisson_converged=jnp.array(True),
     )
     counters = CounterState(
         ntot_ionized=jnp.array(0, dtype=jnp.int32),
@@ -190,4 +197,67 @@ def create_initial_state(config: SimulationConfig) -> SimState:
         ion_leave_remainder=jnp.array(0.0, dtype=jnp.float32),
         step=jnp.array(0, dtype=jnp.int32),
         rng_key=jax.random.PRNGKey(config.seed),
+    )
+
+
+def create_triangular_initial_state(config: SimulationConfig) -> SimState:
+    """Build an empty PIC state on an offline-generated triangular mesh."""
+
+    if not config.mesh_path:
+        raise ValueError("mesh_path is required when mesh_mode='triangular_fem'")
+    if config.macro_particle_weight <= 0.0:
+        raise ValueError("macro_particle_weight must be positive")
+    mesh = load_tri_mesh(config.mesh_path)
+    scale = config.scale
+    b_scaled = config.b / scale
+    n_gas_scaled = config.p_pa / (K_B * config.t_gas) / scale
+    radius_anode = config.r * scale
+    dt = 1.0 / (EV * b_scaled / E_M) / 10.0 * config.gyro_coeff
+    # Kept for source/sink geometry compatibility; there is no initial seed.
+    radius_injection = 0.6 * radius_anode
+    hot_radius = 0.01 * scale
+    cold_radius = 0.15 * scale
+    geometry = TriangularGeometryState(
+        mesh=mesh,
+        x_center=0.0,
+        y_center=0.0,
+        radius_anode=radius_anode,
+        radius_injection=radius_injection,
+        ion_radius_leave_min=hot_radius,
+        ion_radius_leave_max=cold_radius,
+    )
+    i_hot_scaled = config.i_hot * scale
+    i_cold_scaled = config.i_cold * scale
+    i_ion_leave = i_cold_scaled / (1.0 + config.gamma)
+    runtime = RuntimeState(
+        dt=dt,
+        n_gas_scaled=n_gas_scaled,
+        ptcls_per_macro=config.macro_particle_weight,
+        hot_emit_rate=i_hot_scaled * config.electron_emission_hot_step * dt / EV / config.macro_particle_weight,
+        cold_emit_rate=config.gamma * i_ion_leave * config.electron_emission_cold_step * dt / EV / config.macro_particle_weight,
+        ion_leave_rate=i_ion_leave * config.ion_leave_step * dt / EV / config.macro_particle_weight,
+    )
+    electrons = empty_particle_pool(config.max_electrons, config.b / config.scale)
+    ions = empty_particle_pool(config.max_ions, config.b / config.scale)
+    n_nodes = mesh.points.shape[0]
+    zeros = jnp.zeros((n_nodes,), dtype=jnp.float32)
+    fields = FieldState(
+        rho_e=zeros, rho_i=zeros, rho=zeros, phi=zeros, ex=zeros, ey=zeros,
+        poisson_iterations=jnp.array(0, dtype=jnp.int32),
+        poisson_relative_residual=jnp.array(0.0, dtype=jnp.float32),
+        poisson_converged=jnp.array(True),
+    )
+    counters = CounterState(
+        ntot_ionized=jnp.array(0, dtype=jnp.int32),
+        ntot_cold_cathode_leave=jnp.array(0, dtype=jnp.int32),
+        ntot_anode_leave=jnp.array(0, dtype=jnp.int32),
+        ntot_hot_cathode_emission=jnp.array(0, dtype=jnp.int32),
+    )
+    return SimState(
+        electrons=electrons, ions=ions, fields=fields, geometry=geometry,
+        runtime=runtime, counters=counters,
+        hot_emit_remainder=jnp.array(0.0, dtype=jnp.float32),
+        cold_emit_remainder=jnp.array(0.0, dtype=jnp.float32),
+        ion_leave_remainder=jnp.array(0.0, dtype=jnp.float32),
+        step=jnp.array(0, dtype=jnp.int32), rng_key=jax.random.PRNGKey(config.seed),
     )

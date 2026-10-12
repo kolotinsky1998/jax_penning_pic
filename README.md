@@ -33,6 +33,12 @@ python -m pip install -e ".[test]"
 For GPU runs, install the JAX wheel that matches your CUDA setup if the default
 `jax`/`jaxlib` packages are not appropriate for your machine.
 
+For the optional graded triangular FEM backend, also install:
+
+```bash
+python -m pip install -e ".[fem]"
+```
+
 ## Run A Short Smoke Simulation
 
 ```bash
@@ -58,6 +64,34 @@ outputs/simulation_circle_gyro_new/
   rho_i_*.txt
   phi_*.txt
 ```
+
+## Optional triangular FEM mesh
+
+The original uniform Cartesian finite-difference solver remains the default.
+To use FEM, generate and inspect a static mesh first.  The values below use
+the simulation's scaled length units; with default physics the anode radius is
+`r * scale` and the hot-cathode radius is `0.01 * scale`.
+
+```bash
+python scripts/generate_triangular_mesh.py \
+  --output-dir outputs/meshes/default \
+  --radius 0.0052 --hot-radius 0.0002 \
+  --h-hot 0.00001 --h-bulk 0.00008 --transition-width 0.00005
+```
+
+This produces `mesh.msh`, `mesh.vtu`, `mesh.npz`, and `mesh_metadata.json`.
+Open `mesh.vtu` in ParaView before running:
+
+```bash
+jax-penning-run \
+  --mesh-mode triangular_fem \
+  --mesh-path outputs/meshes/default/mesh.npz \
+  --macro-particle-weight 1e7 \
+  --poisson-solver cg
+```
+
+FEM runs start with empty particle pools and write `fields_*.vtu`, `fields.pvd`
+and `poisson.csv`.  `field_dump_interval` controls the VTK cadence.
 
 ## Useful Commands
 
@@ -100,6 +134,9 @@ Important CLI overrides:
 - `--it-num`
 - `--disable-rho-filter` disables smoothing of the deposited total charge density
 - `--grid-size` (square Poisson grid, `N x N`; minimum `3`)
+- `--mesh-mode` (`uniform_cartesian`, default, or `triangular_fem`)
+- `--mesh-path` (generated `mesh.npz` used by `triangular_fem`)
+- `--macro-particle-weight` (physical particles represented by one macro-particle)
 - `--ion-mass-ratio` (ion mass as a multiple of the electron mass; default `500`)
 - `--ptcls-per-cell`
 - `--log-interval`
