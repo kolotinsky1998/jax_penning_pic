@@ -98,6 +98,8 @@ def generate(args):
         surfaces = gmsh.model.getEntities(2)
         if len(surfaces) != 1:
             raise RuntimeError("expected exactly one disk surface")
+        gmsh.model.addPhysicalGroup(2, [tag for _, tag in surfaces], 2)
+        gmsh.model.setPhysicalName(2, 2, "plasma_domain")
         boundary = gmsh.model.getBoundary(surfaces, oriented=False, recursive=False)
         gmsh.model.addPhysicalGroup(1, [tag for _, tag in boundary], 1)
         gmsh.model.setPhysicalName(1, 1, "anode")
