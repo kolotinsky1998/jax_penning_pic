@@ -25,4 +25,7 @@ def counters_row(step: int, electrons: ParticlePool, ions: ParticlePool, geometr
         "Ntot_cold_cathode_leave": int(counters.ntot_cold_cathode_leave),
         "Ntot_anode_leave": int(counters.ntot_anode_leave),
         "Ntot_hot_cathode_emission": int(counters.ntot_hot_cathode_emission),
+        "Ntot_cold_cathode_emission": int(counters.ntot_cold_cathode_emission),
+        "Ntot_mesh_boundary_leave_e": int(counters.ntot_mesh_boundary_leave_e),
+        "Ntot_mesh_boundary_leave_i": int(counters.ntot_mesh_boundary_leave_i),
     }

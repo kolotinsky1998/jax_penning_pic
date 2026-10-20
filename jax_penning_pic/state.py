@@ -43,6 +43,9 @@ class CounterState(NamedTuple):
     ntot_cold_cathode_leave: jax.Array
     ntot_anode_leave: jax.Array
     ntot_hot_cathode_emission: jax.Array
+    ntot_cold_cathode_emission: jax.Array
+    ntot_mesh_boundary_leave_e: jax.Array
+    ntot_mesh_boundary_leave_i: jax.Array
 
 
 class GeometryState(NamedTuple):
@@ -184,6 +187,9 @@ def create_initial_state(config: SimulationConfig) -> SimState:
         ntot_cold_cathode_leave=jnp.array(0, dtype=jnp.int32),
         ntot_anode_leave=jnp.array(0, dtype=jnp.int32),
         ntot_hot_cathode_emission=jnp.array(0, dtype=jnp.int32),
+        ntot_cold_cathode_emission=jnp.array(0, dtype=jnp.int32),
+        ntot_mesh_boundary_leave_e=jnp.array(0, dtype=jnp.int32),
+        ntot_mesh_boundary_leave_i=jnp.array(0, dtype=jnp.int32),
     )
     return SimState(
         electrons=electrons,
@@ -252,6 +258,9 @@ def create_triangular_initial_state(config: SimulationConfig) -> SimState:
         ntot_cold_cathode_leave=jnp.array(0, dtype=jnp.int32),
         ntot_anode_leave=jnp.array(0, dtype=jnp.int32),
         ntot_hot_cathode_emission=jnp.array(0, dtype=jnp.int32),
+        ntot_cold_cathode_emission=jnp.array(0, dtype=jnp.int32),
+        ntot_mesh_boundary_leave_e=jnp.array(0, dtype=jnp.int32),
+        ntot_mesh_boundary_leave_i=jnp.array(0, dtype=jnp.int32),
     )
     return SimState(
         electrons=electrons, ions=ions, fields=fields, geometry=geometry,

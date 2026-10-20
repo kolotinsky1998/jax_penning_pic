@@ -28,6 +28,11 @@ def main() -> None:
         help="Disable smoothing of the deposited total charge density.",
     )
     parser.add_argument("--output-dir", help="Directory where counters and field dumps will be written.")
+    parser.add_argument(
+        "--overwrite-output",
+        action="store_true",
+        help="Remove known simulation artifacts from an existing output directory before running.",
+    )
     parser.add_argument("--cross-section-dir", help="Directory with collision cross-section .txt files.")
     parser.add_argument("--it-num", type=int, help="Number of simulation steps.")
     parser.add_argument("--grid-size", type=int, help="Poisson grid size in each dimension (N x N, minimum 3).")
@@ -53,6 +58,11 @@ def main() -> None:
     parser.add_argument("--field-dump-interval", type=int, help="Field dump interval for rho_e/rho_i/phi txt files.")
     parser.add_argument("--max-electrons", type=int, help="Fixed electron pool capacity.")
     parser.add_argument("--max-ions", type=int, help="Fixed ion pool capacity.")
+    parser.add_argument(
+        "--validate-particle-domain",
+        action="store_true",
+        help="At output checkpoints, fail if a live FEM particle is outside the triangular mesh.",
+    )
     parser.add_argument("--trace-dir", help="Directory for JAX trace output.")
     parser.add_argument("--trace-start-step", type=int, default=0, help="Step to start JAX tracing from.")
     parser.add_argument("--trace-num-steps", type=int, default=0, help="How many steps to capture in the JAX trace.")
@@ -81,6 +91,7 @@ def main() -> None:
         "field_dump_interval": args.field_dump_interval,
         "max_electrons": args.max_electrons,
         "max_ions": args.max_ions,
+        "validate_particle_domain": True if args.validate_particle_domain else None,
         "use_rho_filter": False if args.disable_rho_filter else None,
     }
     replacements = {key: value for key, value in replacements.items() if value is not None}
@@ -94,6 +105,7 @@ def main() -> None:
         trace_dir=args.trace_dir,
         trace_start_step=args.trace_start_step,
         trace_num_steps=args.trace_num_steps,
+        overwrite_output=args.overwrite_output,
     )
 
 

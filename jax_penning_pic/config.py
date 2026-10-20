@@ -76,6 +76,7 @@ class SimulationConfig:
     mesh_mode: str = "uniform_cartesian"
     mesh_path: str | None = None
     macro_particle_weight: float = 1.0
+    validate_particle_domain: bool = False
 
     @property
     def t_e_kelvin(self) -> float:
@@ -137,4 +138,5 @@ def default_config(
         mesh_mode="uniform_cartesian",
         mesh_path=None,
         macro_particle_weight=1.0,
+        validate_particle_domain=False,
     )

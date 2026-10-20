@@ -25,3 +25,21 @@ def test_rho_filter_flag(monkeypatch, args, expected):
     cli.main()
 
     assert captured["config"].use_rho_filter is expected
+
+
+def test_output_and_domain_validation_flags(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "sys.argv",
+        ["jax-penning-run", "--overwrite-output", "--validate-particle-domain"],
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_simulation",
+        lambda config, **kwargs: captured.update(config=config, kwargs=kwargs),
+    )
+
+    cli.main()
+
+    assert captured["config"].validate_particle_domain is True
+    assert captured["kwargs"]["overwrite_output"] is True

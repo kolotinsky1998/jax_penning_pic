@@ -8,6 +8,7 @@ import time
 import jax
 import jax.numpy as jnp
 import jax.profiler
+import numpy as np
 
 from .collisions import (
     apply_electron_elastic,
@@ -21,7 +22,7 @@ from .collisions import (
 from .config import E_M, EV, default_config, SimulationConfig
 from .diagnostics import counters_row
 from .interpolation import linear_charge_deposition, linear_field_gather, rho_filter_new
-from .io import append_csv_row, ensure_output_dir, save_matrix_txt, write_json, write_metadata, write_triangular_vtk
+from .io import append_csv_row, prepare_output_dir, save_matrix_txt, write_json, write_metadata, write_triangular_vtk
 from .gyro import gyro_push, gyro_update_velocity
 from .particles import boris_push, boris_update_velocity
 from .poisson import (
@@ -44,10 +45,13 @@ from .sources_sinks import (
 from .state import create_initial_state, create_triangular_initial_state
 from .triangular_fem import (
     cell_field_to_nodes,
+    remove_outside_triangular_mesh,
     solve_triangular_poisson,
     triangular_charge_deposition,
     triangular_electric_field,
     triangular_field_gather,
+    triangular_mesh_contains,
+    triangular_particle_location,
 )
 
 
@@ -178,9 +182,12 @@ def _hot_emission_kernel(electrons, counters, rng_key, geometry, count):
     return electrons, counters
 
 
-def _cold_secondary_kernel(electrons, rng_key, geometry, count):
-    electrons, _ = cold_secondary_emission(electrons, rng_key, geometry, count, E_M)
-    return electrons
+def _cold_secondary_kernel(electrons, counters, rng_key, geometry, count):
+    electrons, emitted_cold = cold_secondary_emission(electrons, rng_key, geometry, count, E_M)
+    counters = counters._replace(
+        ntot_cold_cathode_emission=counters.ntot_cold_cathode_emission + emitted_cold
+    )
+    return electrons, counters
 
 
 def _solve_poisson(rho, state, tables, config: SimulationConfig):
@@ -249,6 +256,19 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
     cold_emit_remainder = state.cold_emit_remainder
     ion_leave_remainder = state.ion_leave_remainder
 
+    # The P1 polygon is the FEM computational domain and its absorbing anode.
+    # Absorb immediately after the push so escaped particles cannot collide or
+    # ionize while carrying zero gathered field outside the mesh.
+    if config.mesh_mode == "triangular_fem":
+        with jax.named_scope("mesh_boundary_loss"):
+            electrons, removed_mesh_e = remove_outside_triangular_mesh(electrons, state.geometry.mesh)
+            ions, removed_mesh_i = remove_outside_triangular_mesh(ions, state.geometry.mesh)
+            counters = counters._replace(
+                ntot_anode_leave=counters.ntot_anode_leave + removed_mesh_e,
+                ntot_mesh_boundary_leave_e=counters.ntot_mesh_boundary_leave_e + removed_mesh_e,
+                ntot_mesh_boundary_leave_i=counters.ntot_mesh_boundary_leave_i + removed_mesh_i,
+            )
+
     do_electron_collisions = jnp.equal(jnp.mod(state.step, config.collision_step_electron), 0)
     with jax.named_scope("electron_collisions"):
         electrons, ions, counters, rng_key = jax.lax.cond(
@@ -267,10 +287,11 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
             (ions, rng_key),
         )
 
-    with jax.named_scope("anode_loss"):
-        electrons, removed_e = remove_on_anode(electrons, state.geometry)
-        counters = counters._replace(ntot_anode_leave=counters.ntot_anode_leave + removed_e)
-        ions, _ = remove_on_anode(ions, state.geometry)
+    if config.mesh_mode == "uniform_cartesian":
+        with jax.named_scope("anode_loss"):
+            electrons, removed_e = remove_on_anode(electrons, state.geometry)
+            counters = counters._replace(ntot_anode_leave=counters.ntot_anode_leave + removed_e)
+            ions, _ = remove_on_anode(ions, state.geometry)
 
     do_cold_sink = jnp.equal(jnp.mod(state.step, config.ion_leave_step), 0)
     ion_leave_count, ion_leave_remainder = _event_count(
@@ -310,11 +331,11 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
     )
     rng_key, cold_key = jax.random.split(rng_key)
     with jax.named_scope("cold_secondary_emission"):
-        electrons = jax.lax.cond(
+        electrons, counters = jax.lax.cond(
             do_cold_emit,
             lambda args: _cold_secondary_kernel(*args),
-            lambda args: args[0],
-            (electrons, cold_key, state.geometry, cold_emit_count),
+            lambda args: args[:2],
+            (electrons, counters, cold_key, state.geometry, cold_emit_count),
         )
 
     return state._replace(
@@ -509,10 +530,13 @@ def step_once_profiled(state, tables, config: SimulationConfig):
             state.runtime.cold_emit_rate,
             cold_emit_remainder,
         )
-        electrons, _ = _timed_stage(
+        electrons, emitted_cold = _timed_stage(
             profile_row,
             "cold_secondary_emission_s",
             lambda: cold_secondary_emission(electrons, key7, state.geometry, cold_emit_count, E_M),
+        )
+        counters = counters._replace(
+            ntot_cold_cathode_emission=counters.ntot_cold_cathode_emission + emitted_cold
         )
     else:
         profile_row["cold_secondary_emission_s"] = 0.0
@@ -550,6 +574,90 @@ def _compute_block_size(config: SimulationConfig) -> int:
     for interval in intervals[1:]:
         block = math.gcd(block, interval)
     return max(1, block)
+
+
+def _mesh_derived_metadata(state) -> dict:
+    mesh = state.geometry.mesh
+    points = np.asarray(mesh.points)
+    cells = np.asarray(mesh.cells)
+    areas = np.asarray(mesh.areas)
+    edges = np.concatenate((cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]), axis=0)
+    edges.sort(axis=1)
+    boundary_edges, counts = np.unique(edges, axis=0, return_counts=True)
+    boundary_edges = boundary_edges[counts == 1]
+    boundary_lengths = np.linalg.norm(
+        points[boundary_edges[:, 1]] - points[boundary_edges[:, 0]], axis=1
+    )
+    area = float(areas.sum())
+    return {
+        "n_nodes": int(points.shape[0]),
+        "n_triangles": int(cells.shape[0]),
+        "area": area,
+        "area_min": float(areas.min()),
+        "area_max": float(areas.max()),
+        "effective_radius": math.sqrt(area / math.pi),
+        "max_boundary_edge_length": float(boundary_lengths.max()),
+    }
+
+
+def _derived_metadata(state, config: SimulationConfig) -> dict:
+    derived = {
+        "dt": float(state.runtime.dt),
+        "macro_particle_weight": float(state.runtime.ptcls_per_macro),
+    }
+    if config.mesh_mode == "triangular_fem":
+        derived["mesh"] = _mesh_derived_metadata(state)
+    return derived
+
+
+def _validate_triangular_mesh_geometry(state, config: SimulationConfig):
+    if config.mesh_mode != "triangular_fem":
+        return
+    mesh = state.geometry.mesh
+    points = np.asarray(mesh.points)
+    boundary = np.asarray(mesh.boundary_mask, dtype=bool)
+    if not boundary.any():
+        raise ValueError("triangular FEM mesh has no boundary nodes")
+    mesh_info = _mesh_derived_metadata(state)
+    center = np.array([state.geometry.x_center, state.geometry.y_center], dtype=np.float64)
+    boundary_radius = np.linalg.norm(points[boundary] - center, axis=1)
+    expected_radius = float(state.geometry.radius_anode)
+    tolerance = max(1.0e-7, 1.1 * mesh_info["max_boundary_edge_length"])
+    if np.max(np.abs(boundary_radius - expected_radius)) > tolerance:
+        raise ValueError(
+            "triangular mesh boundary is incompatible with the configured anode: "
+            f"expected radius {expected_radius:.8g}, observed "
+            f"[{boundary_radius.min():.8g}, {boundary_radius.max():.8g}]"
+        )
+
+    # Emission positions must be inside the computational domain by
+    # construction; otherwise they would violate the alive/located invariant
+    # before the next field deposition.
+    angles = np.linspace(0.0, 2.0 * np.pi, 721, endpoint=False)
+    for label, radius in (
+        ("hot cathode", state.geometry.ion_radius_leave_min),
+        ("cold cathode", state.geometry.ion_radius_leave_max),
+    ):
+        x = center[0] + radius * np.cos(angles)
+        y = center[1] + radius * np.sin(angles)
+        _, _, located = triangular_particle_location(jnp.asarray(x), jnp.asarray(y), mesh)
+        if not bool(jnp.all(located)):
+            raise ValueError(f"{label} emission region is not fully contained in the triangular mesh")
+
+
+def _validate_triangular_particle_domain(state, config: SimulationConfig):
+    if config.mesh_mode != "triangular_fem" or not config.validate_particle_domain:
+        return
+    mesh = state.geometry.mesh
+    electrons_located = triangular_mesh_contains(state.electrons, mesh)
+    ions_located = triangular_mesh_contains(state.ions, mesh)
+    invalid_e = int(jnp.sum(state.electrons.alive & ~electrons_located))
+    invalid_i = int(jnp.sum(state.ions.alive & ~ions_located))
+    if invalid_e or invalid_i:
+        raise RuntimeError(
+            f"FEM particle-domain invariant failed at step {int(state.step)}: "
+            f"{invalid_e} electrons and {invalid_i} ions are alive outside the mesh"
+        )
 
 
 def _dump_fields(out_dir: Path, state, config: SimulationConfig):
@@ -599,13 +707,22 @@ def run_simulation(
     trace_dir: str | None = None,
     trace_start_step: int = 0,
     trace_num_steps: int = 0,
+    overwrite_output: bool = False,
 ):
     config = config or default_config()
-    out_dir = ensure_output_dir(config.output_dir)
+    out_dir = prepare_output_dir(config.output_dir, overwrite=overwrite_output)
+    if config.mesh_mode not in {"uniform_cartesian", "triangular_fem"}:
+        raise ValueError("mesh_mode must be 'uniform_cartesian' or 'triangular_fem'")
+    state = create_triangular_initial_state(config) if config.mesh_mode == "triangular_fem" else create_initial_state(config)
+    if config.mesh_mode == "uniform_cartesian":
+        state = initialize_particles(state, config)
+    _validate_triangular_mesh_geometry(state, config)
     write_metadata(
         out_dir / "metadata.json",
         {
+            "output_schema_version": 2,
             "config": asdict(config),
+            "derived": _derived_metadata(state, config),
             "profiling_enabled": profile,
             "trace_dir": trace_dir,
             "trace_start_step": trace_start_step,
@@ -613,11 +730,6 @@ def run_simulation(
             "execution_mode": "profiled_python_loop" if profile else "jit_block_loop",
         },
     )
-    if config.mesh_mode not in {"uniform_cartesian", "triangular_fem"}:
-        raise ValueError("mesh_mode must be 'uniform_cartesian' or 'triangular_fem'")
-    state = create_triangular_initial_state(config) if config.mesh_mode == "triangular_fem" else create_initial_state(config)
-    if config.mesh_mode == "uniform_cartesian":
-        state = initialize_particles(state, config)
     tables = {
         "electron_elastic": load_cross_section(config.cross_sections.electron_elastic),
         "electron_ionization": load_cross_section(config.cross_sections.electron_ionization),
@@ -634,6 +746,7 @@ def run_simulation(
     append_csv_row(out_dir / "counters.csv", counters_row(0, state.electrons, state.ions, state.geometry, state.counters))
     _dump_fields(out_dir, state, config)
     _record_poisson_status(out_dir, state, config)
+    _validate_triangular_particle_domain(state, config)
 
     if profile:
         profile_rows = []
@@ -642,6 +755,7 @@ def run_simulation(
             state, profile_row = step_once_profiled(state, tables, config)
             io_before = time.perf_counter()
             if (it + 1) % config.log_interval == 0:
+                _validate_triangular_particle_domain(state, config)
                 append_csv_row(
                     out_dir / "counters.csv",
                     counters_row(int(state.step), state.electrons, state.ions, state.geometry, state.counters),
@@ -701,6 +815,7 @@ def run_simulation(
             trace_path = None
         current_step = int(state.step)
         if current_step % config.log_interval == 0:
+            _validate_triangular_particle_domain(state, config)
             append_csv_row(out_dir / "counters.csv", counters_row(current_step, state.electrons, state.ions, state.geometry, state.counters))
         if current_step % config.field_dump_interval == 0:
             _dump_fields(out_dir, state, config)

@@ -7,9 +7,47 @@ from pathlib import Path
 import numpy as np
 
 
+OUTPUT_EXACT_FILES = {
+    "metadata.json",
+    "counters.csv",
+    "poisson.csv",
+    "profiling.csv",
+    "profiling_summary.json",
+    "fields.pvd",
+}
+OUTPUT_GLOBS = (
+    "fields_*.vtu",
+    "rho_e_*.txt",
+    "rho_i_*.txt",
+    "phi_*.txt",
+)
+
+
 def ensure_output_dir(path: str | Path) -> Path:
     out = Path(path)
     out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def prepare_output_dir(path: str | Path, overwrite: bool = False) -> Path:
+    """Create an output directory without silently mixing simulation runs."""
+
+    out = ensure_output_dir(path)
+    artifacts = [out / name for name in OUTPUT_EXACT_FILES if (out / name).exists()]
+    for pattern in OUTPUT_GLOBS:
+        artifacts.extend(out.glob(pattern))
+    artifacts = sorted(set(artifacts))
+    if artifacts and not overwrite:
+        names = ", ".join(item.name for item in artifacts[:5])
+        if len(artifacts) > 5:
+            names += f", ... ({len(artifacts)} files total)"
+        raise FileExistsError(
+            f"output directory already contains simulation artifacts: {names}; "
+            "choose a new --output-dir or pass --overwrite-output"
+        )
+    if overwrite:
+        for artifact in artifacts:
+            artifact.unlink()
     return out
 
 

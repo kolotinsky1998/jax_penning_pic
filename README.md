@@ -92,6 +92,8 @@ jax-penning-run \
 
 FEM runs start with empty particle pools and write `fields_*.vtu`, `fields.pvd`
 and `poisson.csv`.  `field_dump_interval` controls the VTK cadence.
+The triangular mesh boundary is the absorbing anode: particles are removed as
+soon as a push takes them outside the FEM domain, before collision handling.
 
 ## Useful Commands
 
@@ -144,6 +146,11 @@ Important CLI overrides:
 - `--poisson-solver`
 - `--max-electrons`
 - `--max-ions`
+- `--validate-particle-domain` checks at logging checkpoints that every live FEM particle is inside the mesh
+- `--overwrite-output` removes only known simulation artifacts before reusing an output directory
+
+Existing simulation output is never appended to silently.  Use a fresh
+`--output-dir` for each run, or opt in explicitly with `--overwrite-output`.
 
 By default, cross sections are loaded from:
 

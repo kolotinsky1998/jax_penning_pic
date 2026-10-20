@@ -75,7 +75,7 @@ def load_tri_mesh(path: str | Path) -> TriMeshState:
     )
 
 
-def _locate_particles(x, y, mesh: TriMeshState):
+def triangular_particle_location(x, y, mesh: TriMeshState):
     """Return containing cells and P1 barycentric weights for particle positions."""
 
     # Array dimensions are static under JIT; do not rely on the metadata tuple
@@ -107,8 +107,24 @@ def _locate_particles(x, y, mesh: TriMeshState):
     return cell, bary, found
 
 
+def triangular_mesh_contains(pool, mesh: TriMeshState):
+    """Return whether each particle position belongs to the FEM domain."""
+
+    _, _, located = triangular_particle_location(pool.x, pool.y, mesh)
+    return located
+
+
+def remove_outside_triangular_mesh(pool, mesh: TriMeshState):
+    """Absorb live particles that have crossed the actual P1 mesh boundary."""
+
+    located = triangular_mesh_contains(pool, mesh)
+    outside = pool.alive & ~located
+    removed = outside.astype(jnp.int32).sum()
+    return pool._replace(alive=pool.alive & located), removed
+
+
 def triangular_charge_deposition(pool, mesh: TriMeshState, particle_charge: float):
-    cells, bary, located = _locate_particles(pool.x, pool.y, mesh)
+    cells, bary, located = triangular_particle_location(pool.x, pool.y, mesh)
     valid = pool.alive & located
     contributions = valid[:, None].astype(jnp.float32) * bary * particle_charge
     nodes = mesh.cells[cells]
@@ -124,7 +140,7 @@ def triangular_electric_field(phi, mesh: TriMeshState):
 
 
 def triangular_field_gather(pool, field_cells, mesh: TriMeshState):
-    cells, _, located = _locate_particles(pool.x, pool.y, mesh)
+    cells, _, located = triangular_particle_location(pool.x, pool.y, mesh)
     field = field_cells[cells]
     valid = pool.alive & located
     ex = jnp.where(valid, field[:, 0], 0.0)
