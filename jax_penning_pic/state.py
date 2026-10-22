@@ -24,6 +24,7 @@ class ParticlePool(NamedTuple):
     vy_c: jax.Array
     vz_c: jax.Array
     alive: jax.Array
+    generation: jax.Array
 
 
 class FieldState(NamedTuple):
@@ -89,6 +90,7 @@ class SimState(NamedTuple):
 def empty_particle_pool(capacity: int, magnetic_field: float) -> ParticlePool:
     zeros = jnp.zeros((capacity,), dtype=jnp.float32)
     alive = jnp.zeros((capacity,), dtype=bool)
+    generation = jnp.zeros((capacity,), dtype=jnp.uint32)
     bz = jnp.full((capacity,), magnetic_field, dtype=jnp.float32)
     return ParticlePool(
         x=zeros,
@@ -105,6 +107,7 @@ def empty_particle_pool(capacity: int, magnetic_field: float) -> ParticlePool:
         vy_c=zeros,
         vz_c=zeros,
         alive=alive,
+        generation=generation,
     )
 
 

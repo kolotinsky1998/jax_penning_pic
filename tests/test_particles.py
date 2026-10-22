@@ -19,3 +19,20 @@ def test_write_particles_drops_invalid_updates_without_touching_slot_zero():
     assert not bool(updated.alive[3])
     assert float(updated.x[0]) == 10.0
     assert float(updated.x[3]) == 0.0
+    assert int(updated.generation[0]) == 1
+    assert int(updated.generation[3]) == 0
+
+
+def test_reusing_a_slot_increments_its_generation():
+    pool = empty_particle_pool(capacity=1, magnetic_field=0.0)
+    index = jnp.array([0])
+    valid = jnp.array([True])
+    values = jnp.array([1.0])
+    zeros = jnp.zeros_like(values)
+
+    first = write_particles(pool, index, valid, values, values, zeros, zeros, zeros)
+    dead = first._replace(alive=jnp.array([False]))
+    second = write_particles(dead, index, valid, values, values, zeros, zeros, zeros)
+
+    assert int(first.generation[0]) == 1
+    assert int(second.generation[0]) == 2

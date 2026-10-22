@@ -22,7 +22,15 @@ from .collisions import (
 from .config import E_M, EV, default_config, SimulationConfig
 from .diagnostics import counters_row
 from .interpolation import linear_charge_deposition, linear_field_gather, rho_filter_new
-from .io import append_csv_row, prepare_output_dir, save_matrix_txt, write_json, write_metadata, write_triangular_vtk
+from .io import (
+    append_csv_row,
+    prepare_output_dir,
+    save_matrix_txt,
+    write_json,
+    write_metadata,
+    write_particle_vtp,
+    write_triangular_vtk,
+)
 from .gyro import gyro_push, gyro_update_velocity
 from .particles import boris_push, boris_update_velocity
 from .poisson import (
@@ -86,6 +94,7 @@ def _block_particles(pool):
     jax.block_until_ready(pool.vy)
     jax.block_until_ready(pool.vz)
     jax.block_until_ready(pool.alive)
+    jax.block_until_ready(pool.generation)
 
 
 def _block_fields(fields):
@@ -682,6 +691,71 @@ def _dump_fields(out_dir: Path, state, config: SimulationConfig):
     save_matrix_txt(out_dir / f"phi_{step}.txt", state.fields.phi)
 
 
+def _sample_particle_pool(pool, *, species: int, species_offset: int, total_capacity: int, stride: int):
+    """Collect one stable-ID sample while transferring only selected coordinates."""
+
+    alive = np.asarray(jax.device_get(pool.alive), dtype=bool)
+    generation_all = np.asarray(jax.device_get(pool.generation), dtype=np.uint32)
+    slots = np.flatnonzero(alive).astype(np.int64, copy=False)
+    generations = generation_all[slots]
+    if np.any(generations == 0):
+        raise RuntimeError("live particle has generation zero; particle identity invariant is broken")
+
+    particle_ids = (
+        (generations.astype(np.int64) - 1) * total_capacity
+        + species_offset
+        + slots
+    )
+    selected = (particle_ids % stride) == 0
+    slots = slots[selected]
+    generations = generations[selected]
+    particle_ids = particle_ids[selected]
+
+    device_slots = jnp.asarray(slots, dtype=jnp.int32)
+    x = np.asarray(jax.device_get(pool.x[device_slots]), dtype=np.float32)
+    y = np.asarray(jax.device_get(pool.y[device_slots]), dtype=np.float32)
+    return {
+        "x": x,
+        "y": y,
+        "particle_id": particle_ids,
+        "species": np.full(slots.size, species, dtype=np.int8),
+        "slot_id": slots.astype(np.int32, copy=False),
+        "generation": generations,
+    }
+
+
+def _dump_particles(out_dir: Path, state, config: SimulationConfig):
+    stride = config.particle_sample_stride
+    if stride == 0:
+        return
+
+    electron_capacity = state.electrons.x.shape[0]
+    ion_capacity = state.ions.x.shape[0]
+    total_capacity = electron_capacity + ion_capacity
+    electrons = _sample_particle_pool(
+        state.electrons,
+        species=0,
+        species_offset=0,
+        total_capacity=total_capacity,
+        stride=stride,
+    )
+    ions = _sample_particle_pool(
+        state.ions,
+        species=1,
+        species_offset=electron_capacity,
+        total_capacity=total_capacity,
+        stride=stride,
+    )
+    combined = {
+        name: np.concatenate((electrons[name], ions[name]))
+        for name in electrons
+    }
+    write_particle_vtp(
+        out_dir / f"particles_{int(state.step)}.vtp",
+        **combined,
+    )
+
+
 def _record_poisson_status(out_dir: Path, state, config: SimulationConfig):
     if config.mesh_mode != "triangular_fem":
         return
@@ -710,6 +784,8 @@ def run_simulation(
     overwrite_output: bool = False,
 ):
     config = config or default_config()
+    if not isinstance(config.particle_sample_stride, (int, np.integer)) or config.particle_sample_stride < 0:
+        raise ValueError("particle_sample_stride must be a non-negative integer")
     out_dir = prepare_output_dir(config.output_dir, overwrite=overwrite_output)
     if config.mesh_mode not in {"uniform_cartesian", "triangular_fem"}:
         raise ValueError("mesh_mode must be 'uniform_cartesian' or 'triangular_fem'")
@@ -720,7 +796,7 @@ def run_simulation(
     write_metadata(
         out_dir / "metadata.json",
         {
-            "output_schema_version": 2,
+            "output_schema_version": 3,
             "config": asdict(config),
             "derived": _derived_metadata(state, config),
             "profiling_enabled": profile,
@@ -745,6 +821,7 @@ def run_simulation(
 
     append_csv_row(out_dir / "counters.csv", counters_row(0, state.electrons, state.ions, state.geometry, state.counters))
     _dump_fields(out_dir, state, config)
+    _dump_particles(out_dir, state, config)
     _record_poisson_status(out_dir, state, config)
     _validate_triangular_particle_domain(state, config)
 
@@ -762,6 +839,7 @@ def run_simulation(
                 )
             if (it + 1) % config.field_dump_interval == 0:
                 _dump_fields(out_dir, state, config)
+                _dump_particles(out_dir, state, config)
                 _record_poisson_status(out_dir, state, config)
             io_after = time.perf_counter()
             profile_row["io_s"] = io_after - io_before
@@ -819,6 +897,7 @@ def run_simulation(
             append_csv_row(out_dir / "counters.csv", counters_row(current_step, state.electrons, state.ions, state.geometry, state.counters))
         if current_step % config.field_dump_interval == 0:
             _dump_fields(out_dir, state, config)
+            _dump_particles(out_dir, state, config)
             _record_poisson_status(out_dir, state, config)
 
     if trace_active:

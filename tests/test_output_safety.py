@@ -17,6 +17,8 @@ def test_overwrite_removes_only_known_simulation_artifacts(tmp_path: Path):
         tmp_path / "metadata.json",
         tmp_path / "counters.csv",
         tmp_path / "fields_100.vtu",
+        tmp_path / "particles.pvd",
+        tmp_path / "particles_100.vtp",
         tmp_path / "rho_e_100.txt",
     ]
     for path in generated:

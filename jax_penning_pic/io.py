@@ -14,9 +14,11 @@ OUTPUT_EXACT_FILES = {
     "profiling.csv",
     "profiling_summary.json",
     "fields.pvd",
+    "particles.pvd",
 }
 OUTPUT_GLOBS = (
     "fields_*.vtu",
+    "particles_*.vtp",
     "rho_e_*.txt",
     "rho_i_*.txt",
     "phi_*.txt",
@@ -70,6 +72,79 @@ def save_matrix_txt(path: Path, array):
 
 def write_json(path: Path, data: dict):
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _vtk_ascii(values) -> str:
+    array = np.asarray(values)
+    if array.size == 0:
+        return ""
+    if np.issubdtype(array.dtype, np.floating):
+        return " ".join(f"{value:.9g}" for value in array.reshape(-1))
+    return " ".join(str(int(value)) for value in array.reshape(-1))
+
+
+def write_particle_vtp(
+    path: Path,
+    *,
+    x,
+    y,
+    particle_id,
+    species,
+    slot_id,
+    generation,
+):
+    """Write a dependency-free VTK PolyData point cloud for ParaView."""
+
+    x_np = np.asarray(x, dtype=np.float32)
+    y_np = np.asarray(y, dtype=np.float32)
+    particle_id_np = np.asarray(particle_id, dtype=np.int64)
+    species_np = np.asarray(species, dtype=np.int8)
+    slot_id_np = np.asarray(slot_id, dtype=np.int32)
+    generation_np = np.asarray(generation, dtype=np.uint32)
+    size = x_np.size
+    arrays = (y_np, particle_id_np, species_np, slot_id_np, generation_np)
+    if any(array.ndim != 1 or array.size != size for array in arrays) or x_np.ndim != 1:
+        raise ValueError("particle VTP arrays must be one-dimensional and have equal lengths")
+
+    points = np.column_stack((x_np, y_np, np.zeros(size, dtype=np.float32)))
+    connectivity = np.arange(size, dtype=np.int64)
+    offsets = np.arange(1, size + 1, dtype=np.int64)
+    path.write_text(
+        "<?xml version=\"1.0\"?>\n"
+        "<VTKFile type=\"PolyData\" version=\"0.1\" byte_order=\"LittleEndian\">\n"
+        "  <PolyData>\n"
+        f"    <Piece NumberOfPoints=\"{size}\" NumberOfVerts=\"{size}\" "
+        "NumberOfLines=\"0\" NumberOfStrips=\"0\" NumberOfPolys=\"0\">\n"
+        "      <PointData GlobalIds=\"particle_id\">\n"
+        f"        <DataArray type=\"Int64\" Name=\"particle_id\" format=\"ascii\">{_vtk_ascii(particle_id_np)}</DataArray>\n"
+        f"        <DataArray type=\"Int8\" Name=\"species\" format=\"ascii\">{_vtk_ascii(species_np)}</DataArray>\n"
+        f"        <DataArray type=\"Int32\" Name=\"slot_id\" format=\"ascii\">{_vtk_ascii(slot_id_np)}</DataArray>\n"
+        f"        <DataArray type=\"UInt32\" Name=\"generation\" format=\"ascii\">{_vtk_ascii(generation_np)}</DataArray>\n"
+        "      </PointData>\n"
+        "      <CellData/>\n"
+        "      <Points>\n"
+        f"        <DataArray type=\"Float32\" NumberOfComponents=\"3\" format=\"ascii\">{_vtk_ascii(points)}</DataArray>\n"
+        "      </Points>\n"
+        "      <Verts>\n"
+        f"        <DataArray type=\"Int64\" Name=\"connectivity\" format=\"ascii\">{_vtk_ascii(connectivity)}</DataArray>\n"
+        f"        <DataArray type=\"Int64\" Name=\"offsets\" format=\"ascii\">{_vtk_ascii(offsets)}</DataArray>\n"
+        "      </Verts>\n"
+        "    </Piece>\n"
+        "  </PolyData>\n"
+        "</VTKFile>\n",
+        encoding="utf-8",
+    )
+
+    files = sorted(path.parent.glob("particles_*.vtp"), key=lambda item: int(item.stem.split("_")[-1]))
+    entries = "\n".join(
+        f'    <DataSet timestep="{item.stem.split("_")[-1]}" group="" part="0" file="{item.name}"/>'
+        for item in files
+    )
+    (path.parent / "particles.pvd").write_text(
+        "<?xml version=\"1.0\"?>\n<VTKFile type=\"Collection\" version=\"0.1\" byte_order=\"LittleEndian\">\n"
+        f"  <Collection>\n{entries}\n  </Collection>\n</VTKFile>\n",
+        encoding="utf-8",
+    )
 
 
 def write_triangular_vtk(

@@ -15,6 +15,13 @@ def positive_float(value: str) -> float:
     return parsed
 
 
+def non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be greater than or equal to zero")
+    return parsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the JAX Penning PIC simulation.")
     parser.add_argument(
@@ -56,6 +63,11 @@ def main() -> None:
     parser.add_argument("--ptcls-per-cell", type=float, help="Initial macroparticles per grid cell.")
     parser.add_argument("--log-interval", type=int, help="Particle counter logging interval.")
     parser.add_argument("--field-dump-interval", type=int, help="Field dump interval for rho_e/rho_i/phi txt files.")
+    parser.add_argument(
+        "--particle-sample-stride",
+        type=non_negative_int,
+        help="Write roughly one in every N live particles at field dump checkpoints (0 disables).",
+    )
     parser.add_argument("--max-electrons", type=int, help="Fixed electron pool capacity.")
     parser.add_argument("--max-ions", type=int, help="Fixed ion pool capacity.")
     parser.add_argument(
@@ -89,6 +101,7 @@ def main() -> None:
         "ptcls_per_cell": args.ptcls_per_cell,
         "log_interval": args.log_interval,
         "field_dump_interval": args.field_dump_interval,
+        "particle_sample_stride": args.particle_sample_stride,
         "max_electrons": args.max_electrons,
         "max_ions": args.max_ions,
         "validate_particle_domain": True if args.validate_particle_domain else None,

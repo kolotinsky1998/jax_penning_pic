@@ -77,6 +77,9 @@ class SimulationConfig:
     mesh_path: str | None = None
     macro_particle_weight: float = 1.0
     validate_particle_domain: bool = False
+    # Zero disables particle snapshots; a positive value keeps particles whose
+    # stable lifetime identifier is divisible by this stride.
+    particle_sample_stride: int = 0
 
     @property
     def t_e_kelvin(self) -> float:
@@ -139,4 +142,5 @@ def default_config(
         mesh_path=None,
         macro_particle_weight=1.0,
         validate_particle_domain=False,
+        particle_sample_stride=0,
     )

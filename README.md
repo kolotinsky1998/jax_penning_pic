@@ -45,6 +45,7 @@ python -m pip install -e ".[fem]"
 python scripts/run_simulation_circle_gyro_new.py \
   --it-num 1000 \
   --field-dump-interval 1000 \
+  --particle-sample-stride 1000 \
   --log-interval 100
 ```
 
@@ -63,7 +64,17 @@ outputs/simulation_circle_gyro_new/
   rho_e_*.txt
   rho_i_*.txt
   phi_*.txt
+  particles_*.vtp
+  particles.pvd
 ```
+
+Particle output is disabled by default.  Set `--particle-sample-stride N` to
+write a stable deterministic sample of approximately one in every `N` live
+macroparticles whenever fields are dumped.  Open `particles.pvd` in ParaView
+to animate the point cloud.  Electron and ion points are combined; point data
+contains a persistent `particle_id` (`GlobalIds`), `species` (`0` electron,
+`1` ion), `slot_id`, and `generation`.  When a dead particle's pool slot is
+reused, the replacement receives a different ID.
 
 ## Optional triangular FEM mesh
 
@@ -143,6 +154,7 @@ Important CLI overrides:
 - `--ptcls-per-cell`
 - `--log-interval`
 - `--field-dump-interval`
+- `--particle-sample-stride` (`0` disables particle snapshots; `N > 0` writes approximately `1/N`)
 - `--poisson-solver`
 - `--max-electrons`
 - `--max-ions`
