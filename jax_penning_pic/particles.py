@@ -65,6 +65,7 @@ def write_particles(pool: ParticlePool, indices, valid, x, y, vx, vy, vz):
     x_old, y_old = pool.x, pool.y
     vx_old, vy_old, vz_old = pool.vx, pool.vy, pool.vz
     alive_old = pool.alive
+    generation_old = pool.generation
     x_new = x_old.at[safe_idx].set(x, mode="drop")
     y_new = y_old.at[safe_idx].set(y, mode="drop")
     vx_new = vx_old.at[safe_idx].set(vx, mode="drop")
@@ -79,6 +80,9 @@ def write_particles(pool: ParticlePool, indices, valid, x, y, vx, vy, vz):
     vy_c_new = pool.vy_c.at[safe_idx].set(vy, mode="drop")
     vz_c_new = pool.vz_c.at[safe_idx].set(vz, mode="drop")
     alive_new = alive_old.at[safe_idx].set(True, mode="drop")
+    # Pool slots are reused. Incrementing the generation gives every particle
+    # lifetime a stable identity without changing the fixed-size JAX arrays.
+    generation_new = generation_old.at[safe_idx].add(valid.astype(jnp.uint32), mode="drop")
     return pool._replace(
         x=x_new,
         y=y_new,
@@ -94,6 +98,7 @@ def write_particles(pool: ParticlePool, indices, valid, x, y, vx, vy, vz):
         vy_c=vy_c_new,
         vz_c=vz_c_new,
         alive=alive_new,
+        generation=generation_new,
     )
 
 

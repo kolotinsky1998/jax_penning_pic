@@ -8,6 +8,7 @@ import time
 import jax
 import jax.numpy as jnp
 import jax.profiler
+import numpy as np
 
 from .collisions import (
     apply_electron_elastic,
@@ -21,14 +22,23 @@ from .collisions import (
 from .config import E_M, EV, default_config, SimulationConfig
 from .diagnostics import counters_row
 from .interpolation import linear_charge_deposition, linear_field_gather, rho_filter_new
-from .io import append_csv_row, ensure_output_dir, save_matrix_txt, write_json, write_metadata
-from .gyro import gyro_push, gyro_update_velocity
-from .particles import boris_push, boris_update_velocity
+from .io import (
+    append_csv_row,
+    prepare_output_dir,
+    save_matrix_txt,
+    write_cartesian_vtu,
+    write_json,
+    write_metadata,
+    write_particle_vtp,
+)
+from .gyro import gyro_push
+from .particles import boris_push
 from .poisson import (
     build_direct_poisson_data,
     build_fft_capacitance_data,
     compute_electric_field,
-    solve_poisson_cg,
+    poisson_relative_residual,
+    solve_poisson_cg_with_info,
     solve_poisson_direct,
     solve_poisson_fft_capacitance,
     solve_poisson_weighted_jacobi,
@@ -36,10 +46,8 @@ from .poisson import (
 from .sources_sinks import (
     cold_secondary_emission,
     hot_cathode_emission,
-    inject_initial_disk_samples,
     remove_on_anode,
     remove_some_ions_on_cold_cathode,
-    sample_reference_initial_disk,
 )
 from .state import create_initial_state
 
@@ -52,22 +60,6 @@ def _ion_charge(state):
     return EV * state.runtime.ptcls_per_macro
 
 
-def initialize_particles(state, config: SimulationConfig):
-    speed_std_e = jnp.sqrt(2.0 * config.init_energy_ev * EV / (3.0 * E_M))
-    speed_std_i = jnp.sqrt(2.0 * config.init_energy_ev * EV / (3.0 * config.m_ion))
-    ntot_seed = max(
-        1,
-        int(jnp.pi * (state.geometry.radius_injection / state.geometry.dx) ** 2 * config.ptcls_per_cell),
-    )
-    key_init, new_key = jax.random.split(state.rng_key)
-    x, y, velocity_factors = sample_reference_initial_disk(key_init, state.geometry, ntot_seed)
-    electrons = inject_initial_disk_samples(state.electrons, x, y, velocity_factors, speed_std_e)
-    ions = inject_initial_disk_samples(state.ions, x, y, velocity_factors, speed_std_i)
-    electrons = gyro_update_velocity(electrons, -0.5 * state.runtime.dt, -EV, E_M)
-    ions = boris_update_velocity(ions, -0.5 * state.runtime.dt, EV, config.m_ion)
-    return state._replace(electrons=electrons, ions=ions, rng_key=new_key)
-
-
 def _block_particles(pool):
     jax.block_until_ready(pool.x)
     jax.block_until_ready(pool.y)
@@ -75,6 +67,7 @@ def _block_particles(pool):
     jax.block_until_ready(pool.vy)
     jax.block_until_ready(pool.vz)
     jax.block_until_ready(pool.alive)
+    jax.block_until_ready(pool.generation)
 
 
 def _block_fields(fields):
@@ -84,6 +77,9 @@ def _block_fields(fields):
     jax.block_until_ready(fields.phi)
     jax.block_until_ready(fields.ex)
     jax.block_until_ready(fields.ey)
+    jax.block_until_ready(fields.poisson_iterations)
+    jax.block_until_ready(fields.poisson_relative_residual)
+    jax.block_until_ready(fields.poisson_converged)
 
 
 def _timed_stage(profile_row: dict, name: str, fn):
@@ -178,18 +174,36 @@ def _cold_secondary_kernel(electrons, rng_key, geometry, count):
 
 def _solve_poisson(rho, state, tables, config: SimulationConfig):
     if config.poisson_solver == "direct_inverse":
-        return solve_poisson_direct(rho, tables["poisson_direct"])
-    if config.poisson_solver == "fft_capacitance":
-        return solve_poisson_fft_capacitance(rho, tables["poisson_fft_capacitance"])
-    if config.poisson_solver == "cg":
-        return solve_poisson_cg(state.fields.phi, rho, state.geometry, config.poisson_iterations, config.poisson_tol)
-    return solve_poisson_weighted_jacobi(
-        state.fields.phi,
-        rho,
-        state.geometry,
-        config.poisson_omega,
-        config.poisson_iterations,
+        phi = solve_poisson_direct(rho, tables["poisson_direct"])
+        iterations = 1
+    elif config.poisson_solver == "fft_capacitance":
+        phi = solve_poisson_fft_capacitance(rho, tables["poisson_fft_capacitance"])
+        iterations = 1
+    elif config.poisson_solver == "cg":
+        phi, iterations, residual = solve_poisson_cg_with_info(
+            state.fields.phi,
+            rho,
+            state.geometry,
+            config.poisson_iterations,
+            config.poisson_tol,
+        )
+    else:
+        phi = solve_poisson_weighted_jacobi(
+            state.fields.phi,
+            rho,
+            state.geometry,
+            config.poisson_omega,
+            config.poisson_iterations,
+        )
+        iterations = config.poisson_iterations
+    if config.poisson_solver != "cg":
+        residual = poisson_relative_residual(phi, rho, state.geometry)
+    info = (
+        jnp.array(iterations, dtype=jnp.int32),
+        residual.astype(jnp.float32),
+        residual <= config.poisson_tol,
     )
+    return phi, info
 
 
 def _step_kernel_impl(state, tables, config: SimulationConfig):
@@ -201,7 +215,7 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
         if config.use_rho_filter:
             rho = rho_filter_new(rho, state.geometry.nr_anode)
     with jax.named_scope("poisson"):
-        phi = _solve_poisson(rho, state, tables, config)
+        phi, poisson_info = _solve_poisson(rho, state, tables, config)
     with jax.named_scope("field_from_phi"):
         ex_grid, ey_grid = compute_electric_field(phi, state.geometry)
     with jax.named_scope("gather"):
@@ -292,7 +306,17 @@ def _step_kernel_impl(state, tables, config: SimulationConfig):
     return state._replace(
         electrons=electrons,
         ions=ions,
-        fields=state.fields._replace(rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid),
+        fields=state.fields._replace(
+            rho_e=rho_e,
+            rho_i=rho_i,
+            rho=rho,
+            phi=phi,
+            ex=ex_grid,
+            ey=ey_grid,
+            poisson_iterations=poisson_info[0],
+            poisson_relative_residual=poisson_info[1],
+            poisson_converged=poisson_info[2],
+        ),
         counters=counters,
         hot_emit_remainder=hot_emit_remainder,
         cold_emit_remainder=cold_emit_remainder,
@@ -337,7 +361,7 @@ def step_once_profiled(state, tables, config: SimulationConfig):
         rho = _timed_stage(profile_row, "rho_filter_s", lambda: rho_filter_new(rho, state.geometry.nr_anode))
     else:
         profile_row["rho_filter_s"] = 0.0
-    phi = _timed_stage(
+    phi, poisson_info = _timed_stage(
         profile_row,
         "poisson_s",
         lambda: _solve_poisson(rho, state, tables, config),
@@ -477,7 +501,17 @@ def step_once_profiled(state, tables, config: SimulationConfig):
     state = state._replace(
         electrons=electrons,
         ions=ions,
-        fields=state.fields._replace(rho_e=rho_e, rho_i=rho_i, rho=rho, phi=phi, ex=ex_grid, ey=ey_grid),
+        fields=state.fields._replace(
+            rho_e=rho_e,
+            rho_i=rho_i,
+            rho=rho,
+            phi=phi,
+            ex=ex_grid,
+            ey=ey_grid,
+            poisson_iterations=poisson_info[0],
+            poisson_relative_residual=poisson_info[1],
+            poisson_converged=poisson_info[2],
+        ),
         counters=counters,
         hot_emit_remainder=hot_emit_remainder,
         cold_emit_remainder=cold_emit_remainder,
@@ -505,6 +539,97 @@ def _compute_block_size(config: SimulationConfig) -> int:
     return max(1, block)
 
 
+def _dump_fields(out_dir: Path, state) -> None:
+    step = int(state.step)
+    save_matrix_txt(out_dir / f"rho_e_{step}.txt", state.fields.rho_e)
+    save_matrix_txt(out_dir / f"rho_i_{step}.txt", state.fields.rho_i)
+    save_matrix_txt(out_dir / f"phi_{step}.txt", state.fields.phi)
+    write_cartesian_vtu(
+        out_dir / f"fields_{step}.vtu",
+        dx=state.geometry.dx,
+        dy=state.geometry.dy,
+        rho_e=state.fields.rho_e,
+        rho_i=state.fields.rho_i,
+        rho=state.fields.rho,
+        phi=state.fields.phi,
+        ex=state.fields.ex,
+        ey=state.fields.ey,
+        elementary_charge=EV,
+    )
+
+
+def _sample_particle_pool(pool, *, species: int, species_offset: int, total_capacity: int, stride: int):
+    """Collect a stable-ID sample while transferring only selected coordinates."""
+
+    alive = np.asarray(jax.device_get(pool.alive), dtype=bool)
+    generation_all = np.asarray(jax.device_get(pool.generation), dtype=np.uint32)
+    slots = np.flatnonzero(alive).astype(np.int64, copy=False)
+    generations = generation_all[slots]
+    if np.any(generations == 0):
+        raise RuntimeError("live particle has generation zero; particle identity invariant is broken")
+
+    particle_ids = (
+        (generations.astype(np.int64) - 1) * total_capacity
+        + species_offset
+        + slots
+    )
+    selected = (particle_ids % stride) == 0
+    slots = slots[selected]
+    generations = generations[selected]
+    particle_ids = particle_ids[selected]
+
+    device_slots = jnp.asarray(slots, dtype=jnp.int32)
+    return {
+        "x": np.asarray(jax.device_get(pool.x[device_slots]), dtype=np.float32),
+        "y": np.asarray(jax.device_get(pool.y[device_slots]), dtype=np.float32),
+        "particle_id": particle_ids,
+        "species": np.full(slots.size, species, dtype=np.int8),
+        "slot_id": slots.astype(np.int32, copy=False),
+        "generation": generations,
+    }
+
+
+def _dump_particles(out_dir: Path, state, config: SimulationConfig) -> None:
+    stride = config.particle_sample_stride
+    if stride == 0:
+        return
+
+    electron_capacity = state.electrons.x.shape[0]
+    ion_capacity = state.ions.x.shape[0]
+    total_capacity = electron_capacity + ion_capacity
+    electrons = _sample_particle_pool(
+        state.electrons,
+        species=0,
+        species_offset=0,
+        total_capacity=total_capacity,
+        stride=stride,
+    )
+    ions = _sample_particle_pool(
+        state.ions,
+        species=1,
+        species_offset=electron_capacity,
+        total_capacity=total_capacity,
+        stride=stride,
+    )
+    write_particle_vtp(
+        out_dir / f"particles_{int(state.step)}.vtp",
+        **{name: np.concatenate((electrons[name], ions[name])) for name in electrons},
+    )
+
+
+def _record_poisson_status(out_dir: Path, state, config: SimulationConfig) -> None:
+    append_csv_row(
+        out_dir / "poisson.csv",
+        {
+            "step": int(state.step),
+            "solver": config.poisson_solver,
+            "iterations": int(state.fields.poisson_iterations),
+            "relative_residual": float(state.fields.poisson_relative_residual),
+            "converged": bool(state.fields.poisson_converged),
+        },
+    )
+
+
 def run_simulation(
     config: SimulationConfig | None = None,
     profile: bool = False,
@@ -512,13 +637,23 @@ def run_simulation(
     trace_dir: str | None = None,
     trace_start_step: int = 0,
     trace_num_steps: int = 0,
+    overwrite_output: bool = False,
 ):
     config = config or default_config()
-    out_dir = ensure_output_dir(config.output_dir)
+    if not isinstance(config.particle_sample_stride, (int, np.integer)) or config.particle_sample_stride < 0:
+        raise ValueError("particle_sample_stride must be a non-negative integer")
+    out_dir = prepare_output_dir(config.output_dir, overwrite=overwrite_output)
+    state = create_initial_state(config)
     write_metadata(
         out_dir / "metadata.json",
         {
             "config": asdict(config),
+            "derived": {
+                "dt": float(state.runtime.dt),
+                "macro_particle_weight": float(state.runtime.ptcls_per_macro),
+            },
+            "output_schema_version": 3,
+            "initial_particle_pools": "empty",
             "profiling_enabled": profile,
             "trace_dir": trace_dir,
             "trace_start_step": trace_start_step,
@@ -526,8 +661,6 @@ def run_simulation(
             "execution_mode": "profiled_python_loop" if profile else "jit_block_loop",
         },
     )
-    state = create_initial_state(config)
-    state = initialize_particles(state, config)
     tables = {
         "electron_elastic": load_cross_section(config.cross_sections.electron_elastic),
         "electron_ionization": load_cross_section(config.cross_sections.electron_ionization),
@@ -539,9 +672,9 @@ def run_simulation(
         tables["poisson_fft_capacitance"] = build_fft_capacitance_data(state.geometry)
 
     append_csv_row(out_dir / "counters.csv", counters_row(0, state.electrons, state.ions, state.geometry, state.counters))
-    save_matrix_txt(out_dir / "rho_e_0.txt", state.fields.rho_e)
-    save_matrix_txt(out_dir / "rho_i_0.txt", state.fields.rho_i)
-    save_matrix_txt(out_dir / "phi_0.txt", state.fields.phi)
+    _dump_fields(out_dir, state)
+    _dump_particles(out_dir, state, config)
+    _record_poisson_status(out_dir, state, config)
 
     if profile:
         profile_rows = []
@@ -555,9 +688,9 @@ def run_simulation(
                     counters_row(int(state.step), state.electrons, state.ions, state.geometry, state.counters),
                 )
             if (it + 1) % config.field_dump_interval == 0:
-                save_matrix_txt(out_dir / f"rho_e_{int(state.step)}.txt", state.fields.rho_e)
-                save_matrix_txt(out_dir / f"rho_i_{int(state.step)}.txt", state.fields.rho_i)
-                save_matrix_txt(out_dir / f"phi_{int(state.step)}.txt", state.fields.phi)
+                _dump_fields(out_dir, state)
+                _dump_particles(out_dir, state, config)
+                _record_poisson_status(out_dir, state, config)
             io_after = time.perf_counter()
             profile_row["io_s"] = io_after - io_before
             profile_row["wall_total_with_io_s"] = io_after - io_t0
@@ -612,9 +745,9 @@ def run_simulation(
         if current_step % config.log_interval == 0:
             append_csv_row(out_dir / "counters.csv", counters_row(current_step, state.electrons, state.ions, state.geometry, state.counters))
         if current_step % config.field_dump_interval == 0:
-            save_matrix_txt(out_dir / f"rho_e_{current_step}.txt", state.fields.rho_e)
-            save_matrix_txt(out_dir / f"rho_i_{current_step}.txt", state.fields.rho_i)
-            save_matrix_txt(out_dir / f"phi_{current_step}.txt", state.fields.phi)
+            _dump_fields(out_dir, state)
+            _dump_particles(out_dir, state, config)
+            _record_poisson_status(out_dir, state, config)
 
     if trace_active:
         jax.profiler.stop_trace()

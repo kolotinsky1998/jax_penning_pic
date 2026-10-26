@@ -64,7 +64,7 @@ def solve_poisson_weighted_jacobi(phi0, rho, geometry: GeometryState, omega: flo
     return jax.lax.fori_loop(0, n_iter, body, phi0)
 
 
-def solve_poisson_cg(phi0, rho, geometry: GeometryState, n_iter: int, tol: float):
+def solve_poisson_cg_with_info(phi0, rho, geometry: GeometryState, n_iter: int, tol: float):
     inside_mask = circular_domain_mask(geometry)
     phi = _mask_inside(phi0, inside_mask)
     b = _mask_inside(rho / EPSILON_0, inside_mask)
@@ -98,8 +98,18 @@ def solve_poisson_cg(phi0, rho, geometry: GeometryState, n_iter: int, tol: float
         p_next = _mask_inside(z_next + beta * p_k, inside_mask)
         return phi_next, r_next, p_next, rz_next, k + 1
 
-    phi, _, _, _, _ = jax.lax.while_loop(cond_fn, body_fn, (phi, r0, p0, rz0, jnp.array(0, dtype=jnp.int32)))
-    return _mask_inside(phi, inside_mask)
+    phi, residual, _, _, iterations = jax.lax.while_loop(
+        cond_fn,
+        body_fn,
+        (phi, r0, p0, rz0, jnp.array(0, dtype=jnp.int32)),
+    )
+    relative_residual = jnp.sqrt(_masked_dot(residual, residual, inside_mask)) / b_norm
+    return _mask_inside(phi, inside_mask), iterations, relative_residual
+
+
+def solve_poisson_cg(phi0, rho, geometry: GeometryState, n_iter: int, tol: float):
+    phi, _, _ = solve_poisson_cg_with_info(phi0, rho, geometry, n_iter, tol)
+    return phi
 
 
 def build_direct_poisson_data(geometry: GeometryState) -> DirectPoissonData:
@@ -203,6 +213,17 @@ def solve_poisson_fft_capacitance(rho: jax.Array, fft_data: FFTCapacitanceData):
     rho_corr_flat = rho_corr_flat.at[fft_data.boundary_indices].set(f_corr)
     rho_final = rho + rho_corr_flat.reshape(rho.shape)
     return jnp.fft.ifft2(jnp.fft.fft2(rho_final / EPSILON_0) * fft_data.green_hat).real.astype(jnp.float32)
+
+
+def poisson_relative_residual(phi, rho, geometry: GeometryState):
+    """Return ||rho/epsilon_0 - A phi|| / ||rho/epsilon_0|| inside the anode."""
+
+    inside_mask = circular_domain_mask(geometry)
+    rhs = _mask_inside(rho / EPSILON_0, inside_mask)
+    residual = rhs - _poisson_operator(phi, inside_mask, geometry.dx, geometry.dy)
+    numerator = jnp.sqrt(_masked_dot(residual, residual, inside_mask))
+    denominator = jnp.sqrt(_masked_dot(rhs, rhs, inside_mask) + 1.0e-30)
+    return numerator / denominator
 
 
 def compute_electric_field(phi, geometry: GeometryState):

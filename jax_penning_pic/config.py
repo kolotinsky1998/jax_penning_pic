@@ -71,6 +71,10 @@ class SimulationConfig:
     cross_sections: CrossSectionPaths
     output_dir: str
     grid_size: int | None = None
+    macro_particle_weight: float = 1.0e7
+    # Zero disables particle snapshots; a positive value keeps particles whose
+    # stable lifetime identifier is divisible by this stride.
+    particle_sample_stride: int = 0
 
     @property
     def t_e_kelvin(self) -> float:
@@ -129,4 +133,6 @@ def default_config(
             ion_elastic=str(cross_section_dir / "Ar+-Ar_elastic.txt"),
         ),
         output_dir=output_dir,
+        macro_particle_weight=1.0e7,
+        particle_sample_stride=0,
     )

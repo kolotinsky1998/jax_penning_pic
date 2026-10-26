@@ -39,6 +39,7 @@ For GPU runs, install the JAX wheel that matches your CUDA setup if the default
 python scripts/run_simulation_circle_gyro_new.py \
   --it-num 1000 \
   --field-dump-interval 1000 \
+  --particle-sample-stride 1000 \
   --log-interval 100
 ```
 
@@ -54,10 +55,30 @@ Default outputs:
 outputs/simulation_circle_gyro_new/
   counters.csv
   metadata.json
+  poisson.csv
   rho_e_*.txt
   rho_i_*.txt
   phi_*.txt
+  fields_*.vtu
+  fields.pvd
+  particles_*.vtp
+  particles.pvd
 ```
+
+Every run starts with empty electron and ion pools. Particles enter through the
+configured emission sources, and `--macro-particle-weight` controls how many
+physical particles each macroparticle represents (default `1e7`).
+
+Open `fields.pvd` in ParaView to inspect or animate the Cartesian field grid.
+Particle output is disabled by default. Set `--particle-sample-stride N` to
+write a deterministic sample of approximately one in every `N` live particles
+at field-dump checkpoints (`1` writes all particles). The point data includes a
+persistent `particle_id`, `species` (`0` electron, `1` ion), `slot_id`, and
+`generation`. A reused pool slot receives a new ID.
+
+Existing simulation output is never appended to silently. Use a fresh
+`--output-dir`, or explicitly pass `--overwrite-output`; overwrite mode removes
+only known simulation artifacts and preserves unrelated files.
 
 ## Useful Commands
 
@@ -100,10 +121,13 @@ Important CLI overrides:
 - `--it-num`
 - `--disable-rho-filter` disables smoothing of the deposited total charge density
 - `--grid-size` (square Poisson grid, `N x N`; minimum `3`)
+- `--macro-particle-weight` (physical particles represented by one macroparticle)
 - `--ion-mass-ratio` (ion mass as a multiple of the electron mass; default `500`)
-- `--ptcls-per-cell`
+- `--ptcls-per-cell` is retained for CLI compatibility but does not seed particles
 - `--log-interval`
 - `--field-dump-interval`
+- `--particle-sample-stride` (`0` disables particle snapshots)
+- `--overwrite-output` safely replaces known artifacts in an existing output directory
 - `--poisson-solver`
 - `--max-electrons`
 - `--max-ions`

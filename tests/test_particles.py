@@ -19,3 +19,5 @@ def test_write_particles_drops_invalid_updates_without_touching_slot_zero():
     assert not bool(updated.alive[3])
     assert float(updated.x[0]) == 10.0
     assert float(updated.x[3]) == 0.0
+    assert int(updated.generation[0]) == 1
+    assert int(updated.generation[3]) == 0

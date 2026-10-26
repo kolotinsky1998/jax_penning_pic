@@ -23,6 +23,7 @@ class ParticlePool(NamedTuple):
     vy_c: jax.Array
     vz_c: jax.Array
     alive: jax.Array
+    generation: jax.Array
 
 
 class FieldState(NamedTuple):
@@ -32,6 +33,9 @@ class FieldState(NamedTuple):
     phi: jax.Array
     ex: jax.Array
     ey: jax.Array
+    poisson_iterations: jax.Array
+    poisson_relative_residual: jax.Array
+    poisson_converged: jax.Array
 
 
 class CounterState(NamedTuple):
@@ -83,6 +87,7 @@ def empty_particle_pool(capacity: int, magnetic_field: float) -> ParticlePool:
     zeros = jnp.zeros((capacity,), dtype=jnp.float32)
     alive = jnp.zeros((capacity,), dtype=bool)
     bz = jnp.full((capacity,), magnetic_field, dtype=jnp.float32)
+    generation = jnp.zeros((capacity,), dtype=jnp.uint32)
     return ParticlePool(
         x=zeros,
         y=zeros,
@@ -98,6 +103,7 @@ def empty_particle_pool(capacity: int, magnetic_field: float) -> ParticlePool:
         vy_c=zeros,
         vz_c=zeros,
         alive=alive,
+        generation=generation,
     )
 
 
@@ -120,9 +126,9 @@ def build_runtime(config: SimulationConfig) -> tuple[GeometryState, RuntimeState
     radius_injection = 0.3 * nx * dx
     x_center = 0.5 * nx * dx
     y_center = 0.5 * ny * dy
-    init_dens = n_e_scaled / 10.0
-    ntot_seed = max(1, int(jnp.pi * (radius_injection / dx) ** 2 * config.ptcls_per_cell))
-    ptcls_per_macro = float(init_dens * jnp.pi * radius_injection**2 / ntot_seed)
+    if config.macro_particle_weight <= 0.0:
+        raise ValueError("macro_particle_weight must be positive")
+    ptcls_per_macro = float(config.macro_particle_weight)
     radius_anode = (nx - 1) * dx / 2.0
     nr_anode = (nx - 1) // 2
     ion_radius_leave_min = 0.01 * scale
@@ -171,6 +177,9 @@ def create_initial_state(config: SimulationConfig) -> SimState:
         phi=jnp.zeros((geometry.nx, geometry.ny), dtype=jnp.float32),
         ex=jnp.zeros((geometry.nx, geometry.ny), dtype=jnp.float32),
         ey=jnp.zeros((geometry.nx, geometry.ny), dtype=jnp.float32),
+        poisson_iterations=jnp.array(0, dtype=jnp.int32),
+        poisson_relative_residual=jnp.array(0.0, dtype=jnp.float32),
+        poisson_converged=jnp.array(True),
     )
     counters = CounterState(
         ntot_ionized=jnp.array(0, dtype=jnp.int32),
