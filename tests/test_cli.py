@@ -3,7 +3,7 @@ import argparse
 import pytest
 
 from jax_penning_pic import cli
-from jax_penning_pic.cli import non_negative_int, positive_float
+from jax_penning_pic.cli import non_negative_int, positive_float, positive_int
 
 
 def test_positive_float_accepts_ion_mass_ratio():
@@ -23,6 +23,13 @@ def test_non_negative_int_validation():
         non_negative_int("-1")
 
 
+def test_positive_int_validation():
+    assert positive_int("1000") == 1000
+    for value in ("0", "-1"):
+        with pytest.raises(argparse.ArgumentTypeError, match="greater than zero"):
+            positive_int(value)
+
+
 def test_output_options_are_forwarded(monkeypatch):
     captured = {}
     monkeypatch.setattr(
@@ -30,6 +37,7 @@ def test_output_options_are_forwarded(monkeypatch):
         [
             "jax-penning-run",
             "--macro-particle-weight", "123",
+            "--poisson-iterations", "1000",
             "--particle-sample-stride", "7",
             "--overwrite-output",
         ],
@@ -39,6 +47,7 @@ def test_output_options_are_forwarded(monkeypatch):
     cli.main()
 
     assert captured["config"].macro_particle_weight == 123.0
+    assert captured["config"].poisson_iterations == 1000
     assert captured["config"].particle_sample_stride == 7
     assert captured["kwargs"]["overwrite_output"] is True
 

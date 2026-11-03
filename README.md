@@ -129,6 +129,7 @@ Important CLI overrides:
 - `--particle-sample-stride` (`0` disables particle snapshots)
 - `--overwrite-output` safely replaces known artifacts in an existing output directory
 - `--poisson-solver`
+- `--poisson-iterations` (maximum iterations per CG/Jacobi field solve; default `250`)
 - `--max-electrons`
 - `--max-ions`
 

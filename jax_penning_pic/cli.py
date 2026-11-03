@@ -22,12 +22,24 @@ def non_negative_int(value: str) -> int:
     return parsed
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the JAX Penning PIC simulation.")
     parser.add_argument(
         "--poisson-solver",
         choices=("direct_inverse", "fft_capacitance", "cg", "jacobi"),
         help="Poisson solver backend to use.",
+    )
+    parser.add_argument(
+        "--poisson-iterations",
+        type=positive_int,
+        help="Maximum Poisson iterations per field solve (default: 250).",
     )
     parser.add_argument(
         "--disable-rho-filter",
@@ -84,6 +96,7 @@ def main() -> None:
     )
     replacements = {
         "poisson_solver": args.poisson_solver,
+        "poisson_iterations": args.poisson_iterations,
         "it_num": args.it_num,
         "grid_size": args.grid_size,
         "macro_particle_weight": args.macro_particle_weight,
