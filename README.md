@@ -121,6 +121,7 @@ Important CLI overrides:
 - `--it-num`
 - `--disable-rho-filter` disables smoothing of the deposited total charge density
 - `--grid-size` (square Poisson grid, `N x N`; minimum `3`)
+- `--hot-cathode-radius` (model-space radius before applying `scale`; default `0.01`, must be below `0.15`)
 - `--macro-particle-weight` (physical particles represented by one macroparticle)
 - `--ion-mass-ratio` (ion mass as a multiple of the electron mass; default `500`)
 - `--ptcls-per-cell` is retained for CLI compatibility but does not seed particles

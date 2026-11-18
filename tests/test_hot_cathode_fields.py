@@ -81,6 +81,22 @@ def test_reconstruct_geometry_for_explicit_grid_size():
     assert grid.dt == pytest.approx(2.5e-11)
 
 
+def test_reconstruct_geometry_uses_configured_hot_cathode_radius():
+    metadata = {
+        "config": {
+            "scale": 0.02,
+            "r": 0.26,
+            "grid_size": 560,
+            "hot_cathode_radius": 0.08,
+        },
+        "derived": {"dt": 1.0e-11},
+    }
+
+    grid = animation.reconstruct_geometry(metadata, 560)
+
+    assert grid.hot_radius == pytest.approx(0.08 * 0.02)
+
+
 def test_reconstruct_geometry_for_automatic_grid_size():
     config = {
         "scale": 0.02,

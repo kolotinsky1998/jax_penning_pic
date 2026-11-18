@@ -131,7 +131,9 @@ def build_runtime(config: SimulationConfig) -> tuple[GeometryState, RuntimeState
     ptcls_per_macro = float(config.macro_particle_weight)
     radius_anode = (nx - 1) * dx / 2.0
     nr_anode = (nx - 1) // 2
-    ion_radius_leave_min = 0.01 * scale
+    if not 0.0 < config.hot_cathode_radius < 0.15:
+        raise ValueError("hot_cathode_radius must be greater than 0 and less than 0.15")
+    ion_radius_leave_min = config.hot_cathode_radius * scale
     ion_radius_leave_max = 0.15 * scale
     i_hot_scaled = config.i_hot * scale
     i_cold_scaled = config.i_cold * scale

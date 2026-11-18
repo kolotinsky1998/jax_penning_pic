@@ -191,10 +191,13 @@ def reconstruct_geometry(metadata: dict, actual_size: int) -> Geometry:
     try:
         scale = float(config["scale"])
         model_radius = float(config["r"]) * scale
+        hot_radius = float(config.get("hot_cathode_radius", 0.01)) * scale
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("В metadata.json отсутствуют корректные config.scale и config.r") from exc
-    if scale <= 0.0 or model_radius <= 0.0:
-        raise ValueError("config.scale и config.r должны быть положительными")
+        raise ValueError(
+            "В metadata.json отсутствуют корректные config.scale, config.r или config.hot_cathode_radius"
+        ) from exc
+    if scale <= 0.0 or model_radius <= 0.0 or hot_radius <= 0.0:
+        raise ValueError("config.scale, config.r и config.hot_cathode_radius должны быть положительными")
 
     configured_size = config.get("grid_size")
     if configured_size is not None:
@@ -223,7 +226,7 @@ def reconstruct_geometry(metadata: dict, actual_size: int) -> Geometry:
         dy=dx,
         x_center=0.5 * actual_size * dx,
         y_center=0.5 * actual_size * dx,
-        hot_radius=0.01 * scale,
+        hot_radius=hot_radius,
         dt=time_step(metadata),
     )
 

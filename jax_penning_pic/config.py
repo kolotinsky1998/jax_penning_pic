@@ -71,6 +71,9 @@ class SimulationConfig:
     cross_sections: CrossSectionPaths
     output_dir: str
     grid_size: int | None = None
+    # Model-space radius before applying ``scale``. The same radius is used
+    # for the hot-emission disk and the inner edge of the cold-cathode ring.
+    hot_cathode_radius: float = 0.01
     macro_particle_weight: float = 1.0e7
     # Zero disables particle snapshots; a positive value keeps particles whose
     # stable lifetime identifier is divisible by this stride.
@@ -95,6 +98,7 @@ def default_config(
         scale=0.02,
         gyro_coeff=100,
         grid_size=None,
+        hot_cathode_radius=0.01,
         it_num=int(400),
         ptcls_per_cell=1.0,
         r=0.26,

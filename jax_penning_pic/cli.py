@@ -29,6 +29,13 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def hot_cathode_radius(value: str) -> float:
+    parsed = positive_float(value)
+    if parsed >= 0.15:
+        raise argparse.ArgumentTypeError("must be less than 0.15")
+    return parsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the JAX Penning PIC simulation.")
     parser.add_argument(
@@ -55,6 +62,11 @@ def main() -> None:
     parser.add_argument("--cross-section-dir", help="Directory with collision cross-section .txt files.")
     parser.add_argument("--it-num", type=int, help="Number of simulation steps.")
     parser.add_argument("--grid-size", type=int, help="Poisson grid size in each dimension (N x N, minimum 3).")
+    parser.add_argument(
+        "--hot-cathode-radius",
+        type=hot_cathode_radius,
+        help="Hot-cathode model radius before applying scale (default: 0.01; must be less than 0.15).",
+    )
     parser.add_argument(
         "--macro-particle-weight",
         type=positive_float,
@@ -99,6 +111,7 @@ def main() -> None:
         "poisson_iterations": args.poisson_iterations,
         "it_num": args.it_num,
         "grid_size": args.grid_size,
+        "hot_cathode_radius": args.hot_cathode_radius,
         "macro_particle_weight": args.macro_particle_weight,
         "m_ion": args.ion_mass_ratio * E_M if args.ion_mass_ratio is not None else None,
         "ptcls_per_cell": args.ptcls_per_cell,

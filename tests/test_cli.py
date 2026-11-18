@@ -3,7 +3,7 @@ import argparse
 import pytest
 
 from jax_penning_pic import cli
-from jax_penning_pic.cli import non_negative_int, positive_float, positive_int
+from jax_penning_pic.cli import hot_cathode_radius, non_negative_int, positive_float, positive_int
 
 
 def test_positive_float_accepts_ion_mass_ratio():
@@ -30,6 +30,17 @@ def test_positive_int_validation():
             positive_int(value)
 
 
+@pytest.mark.parametrize("value", ["0.01", "0.04", "0.08"])
+def test_hot_cathode_radius_accepts_supported_scan_values(value):
+    assert hot_cathode_radius(value) == float(value)
+
+
+@pytest.mark.parametrize("value", ["0", "-0.01", "0.15", "0.2", "nan", "inf"])
+def test_hot_cathode_radius_rejects_out_of_range_values(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        hot_cathode_radius(value)
+
+
 def test_output_options_are_forwarded(monkeypatch):
     captured = {}
     monkeypatch.setattr(
@@ -37,6 +48,7 @@ def test_output_options_are_forwarded(monkeypatch):
         [
             "jax-penning-run",
             "--macro-particle-weight", "123",
+            "--hot-cathode-radius", "0.04",
             "--poisson-iterations", "1000",
             "--particle-sample-stride", "7",
             "--overwrite-output",
@@ -47,6 +59,7 @@ def test_output_options_are_forwarded(monkeypatch):
     cli.main()
 
     assert captured["config"].macro_particle_weight == 123.0
+    assert captured["config"].hot_cathode_radius == 0.04
     assert captured["config"].poisson_iterations == 1000
     assert captured["config"].particle_sample_stride == 7
     assert captured["kwargs"]["overwrite_output"] is True
